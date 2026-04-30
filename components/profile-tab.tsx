@@ -23,6 +23,21 @@ export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
   const [txStatus, setTxStatus] = useState<"idle" | "pending" | "success" | "error">("idle")
   const [txMessage, setTxMessage] = useState<string>("")
 
+  // KYC card dismissal state — persists across sessions via localStorage.
+  // Auto-hides after first successful test payment (since payment proves
+  // the user has migrated Pi, which requires KYC).
+  const [kycHidden, setKycHidden] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false
+    return localStorage.getItem("gyema-kyc-dismissed") === "true"
+  })
+
+  const dismissKyc = () => {
+    setKycHidden(true)
+    if (typeof window !== "undefined") {
+      localStorage.setItem("gyema-kyc-dismissed", "true")
+    }
+  }
+
   // Only show test payment card to non-guest users inside Pi Browser
   const isGuest = user.uid.startsWith("guest-")
   const showTestPayment = !isGuest && isPiSdkAvailable()
@@ -34,6 +49,10 @@ export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
       const paymentId = await createTestPayment()
       setTxStatus("success")
       setTxMessage(`✅ Test payment sent. ID: ${paymentId.slice(0, 12)}…`)
+      // Successful payment proves KYC — auto-dismiss KYC card.
+      if (!kycHidden) {
+        dismissKyc()
+      }
     } catch (err) {
       setTxStatus("error")
       const msg = err instanceof Error ? err.message : "Payment failed."
@@ -84,12 +103,15 @@ export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
           subtitle="Coming in v2"
           disabled
         />
-        <ProfileLink
-          icon="🪪"
-          title="Pi Network KYC"
-          subtitle="Verified by Pi Network — tap to complete or check status"
-          href="https://kyc.pinet.com/user/status"
-        />
+        {!kycHidden && (
+          <DismissibleProfileLink
+            icon="🪪"
+            title="Pi Network KYC"
+            subtitle="Verified by Pi Network — tap to complete or check status"
+            href="https://kyc.pinet.com/user/status"
+            onDismiss={dismissKyc}
+          />
+        )}
       </div>
 
       {showTestPayment && (
@@ -177,4 +199,46 @@ function ProfileLink({
     )
   }
   return content
+}
+
+function DismissibleProfileLink({
+  icon,
+  title,
+  subtitle,
+  href,
+  onDismiss,
+}: {
+  icon: string
+  title: string
+  subtitle: string
+  href: string
+  onDismiss: () => void
+}) {
+  const handleDismissClick = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    onDismiss()
+  }
+
+  return (
+    <div className="relative">
+      <a href={href} target="_blank" rel="noopener noreferrer" className="block">
+        <Card className="p-4 flex items-center gap-3 hover:border-primary cursor-pointer transition-colors">
+          <div className="text-2xl">{icon}</div>
+          <div className="flex-1 min-w-0 pr-6">
+            <p className="font-semibold text-sm">{title}</p>
+            <p className="text-xs text-muted-foreground">{subtitle}</p>
+          </div>
+          <span className="text-muted-foreground">›</span>
+        </Card>
+      </a>
+      <button
+        onClick={handleDismissClick}
+        aria-label="Dismiss KYC card"
+        className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors text-sm"
+      >
+        ✕
+      </button>
+    </div>
+  )
 }
