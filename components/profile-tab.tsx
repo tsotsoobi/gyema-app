@@ -1,9 +1,14 @@
 "use client"
 
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { getListingsByUser } from "@/lib/listings"
-import type { PiUser } from "@/lib/pi-network"
+import {
+  type PiUser,
+  createTestPayment,
+  isPiSdkAvailable,
+} from "@/lib/pi-network"
 
 interface ProfileTabProps {
   user: PiUser
@@ -14,6 +19,27 @@ interface ProfileTabProps {
 export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
   const listings = getListingsByUser(user.uid)
   const completedCount = listings.filter((l) => l.status === "completed").length
+
+  const [txStatus, setTxStatus] = useState<"idle" | "pending" | "success" | "error">("idle")
+  const [txMessage, setTxMessage] = useState<string>("")
+
+  // Only show test payment card to non-guest users inside Pi Browser
+  const isGuest = user.uid.startsWith("guest-")
+  const showTestPayment = !isGuest && isPiSdkAvailable()
+
+  const handleTestPayment = async () => {
+    setTxStatus("pending")
+    setTxMessage("Opening Pi payment dialog...")
+    try {
+      const paymentId = await createTestPayment()
+      setTxStatus("success")
+      setTxMessage(`✅ Test payment sent. ID: ${paymentId.slice(0, 12)}…`)
+    } catch (err) {
+      setTxStatus("error")
+      const msg = err instanceof Error ? err.message : "Payment failed."
+      setTxMessage(`❌ ${msg}`)
+    }
+  }
 
   return (
     <div className="px-4 py-4 space-y-3" data-refresh={refreshKey}>
@@ -65,6 +91,40 @@ export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
           href="https://minepi.com/kyc"
         />
       </div>
+
+      {showTestPayment && (
+        <Card className="p-4 space-y-2">
+          <div className="flex items-start gap-3">
+            <div className="text-2xl">🧪</div>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-sm">Send Test Transaction</p>
+              <p className="text-xs text-muted-foreground">
+                Sends 0.001 testnet π to satisfy Pi Develop's checklist.
+              </p>
+            </div>
+          </div>
+          <Button
+            onClick={handleTestPayment}
+            disabled={txStatus === "pending"}
+            className="w-full h-10"
+          >
+            {txStatus === "pending" ? "Processing..." : "Send 0.001 π"}
+          </Button>
+          {txMessage && (
+            <p
+              className={`text-xs ${
+                txStatus === "success"
+                  ? "text-green-600"
+                  : txStatus === "error"
+                    ? "text-destructive"
+                    : "text-muted-foreground"
+              }`}
+            >
+              {txMessage}
+            </p>
+          )}
+        </Card>
+      )}
 
       <Button
         variant="destructive"
