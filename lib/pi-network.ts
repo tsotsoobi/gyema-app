@@ -90,6 +90,54 @@ export const authenticateWithPi = async (): Promise<PiUser> => {
   }
 }
 
+/**
+ * Create a tiny test payment (0.001 testnet π) to satisfy Pi Develop's
+ * "Process a Transaction" checklist item. Throws if SDK is unavailable
+ * or the payment is cancelled/errors.
+ *
+ * Note: For Pi Develop checklist purposes, the payment only needs to
+ * reach the SDK's createPayment flow. Server-side approval/completion
+ * will be wired up properly when the backend is built (v2).
+ */
+export const createTestPayment = async (): Promise<string> => {
+  if (!isPiSdkAvailable()) {
+    throw new Error(
+      "Pi SDK not available. Open Gyema inside Pi Browser to test."
+    )
+  }
+
+  const Pi = window.Pi!
+
+  return new Promise<string>((resolve, reject) => {
+    Pi.createPayment(
+      {
+        amount: 0.001,
+        memo: "Gyema test transaction",
+        metadata: { type: "checklist_test", app: "gyema" },
+      },
+      {
+        onReadyForServerApproval: (paymentId: string) => {
+          console.log("[gyema] Payment ready for server approval:", paymentId)
+          // v1: no backend yet. Resolve here so the UI can confirm the
+          // SDK round-trip worked. v2 will POST to /api/payments/approve.
+          resolve(paymentId)
+        },
+        onReadyForServerCompletion: (paymentId: string, txid: string) => {
+          console.log("[gyema] Payment completed:", paymentId, txid)
+        },
+        onCancel: (paymentId: string) => {
+          console.log("[gyema] Payment cancelled:", paymentId)
+          reject(new Error("Payment cancelled."))
+        },
+        onError: (error: Error, payment?: PiPayment) => {
+          console.error("[gyema] Payment error:", error, payment)
+          reject(error)
+        },
+      }
+    ).catch(reject)
+  })
+}
+
 // Local-storage helpers for role persistence between sessions.
 // (Listings themselves are also persisted locally for v1 — see lib/listings.ts.)
 
