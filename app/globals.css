@@ -4,76 +4,104 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  /* Gyema palette — Pi purple primary, gold accent, clean neutrals.
-     Matches the look of the Railway design preview. */
-  --background: oklch(0.98 0.005 300);
-  --foreground: oklch(0.15 0.02 290);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.15 0.02 290);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.15 0.02 290);
-  --primary: oklch(0.45 0.18 295);
-  --primary-foreground: oklch(0.98 0 0);
-  --secondary: oklch(0.78 0.16 75);
-  --secondary-foreground: oklch(0.2 0.03 290);
-  --muted: oklch(0.95 0.01 300);
-  --muted-foreground: oklch(0.5 0.02 290);
-  --accent: oklch(0.78 0.16 75);
-  --accent-foreground: oklch(0.2 0.03 290);
-  --destructive: oklch(0.55 0.22 25);
-  --destructive-foreground: oklch(0.98 0 0);
-  --border: oklch(0.9 0.01 300);
-  --input: oklch(0.9 0.01 300);
-  --ring: oklch(0.45 0.18 295);
-  --chart-1: oklch(0.45 0.18 295);
-  --chart-2: oklch(0.78 0.16 75);
-  --chart-3: oklch(0.6 0.15 320);
-  --chart-4: oklch(0.55 0.22 25);
-  --chart-5: oklch(0.65 0.12 180);
+  /* Gyema Kente palette — Ghanaian-rooted identity.
+     Indigo base, Gold primary action, Vermillion accent,
+     Forest Green for the header, Cream for warmth. */
+
+  /* Surfaces */
+  --background: #FEF7E6;        /* cream */
+  --foreground: #1E1B4B;        /* indigo */
+  --card: #FFFFFF;              /* white cards lift on cream */
+  --card-foreground: #1E1B4B;
+  --popover: #FFFFFF;
+  --popover-foreground: #1E1B4B;
+
+  /* Primary action: GOLD */
+  --primary: #F5B800;
+  --primary-foreground: #1E1B4B;  /* indigo text on gold — readable, bold */
+
+  /* Secondary: Forest Green */
+  --secondary: #15803D;
+  --secondary-foreground: #FEF7E6;
+
+  /* Muted: warm gray that sits on cream */
+  --muted: #F0E5C8;
+  --muted-foreground: #6B6B5E;
+
+  /* Accent: Vermillion (used for active tabs, alerts) */
+  --accent: #DC2626;
+  --accent-foreground: #FEF7E6;
+
+  /* Destructive (Disconnect button) — keep red, slightly deeper */
+  --destructive: #DC2626;
+  --destructive-foreground: #FEF7E6;
+
+  /* Borders / inputs */
+  --border: #F0E5C8;
+  --input: #F0E5C8;
+  --ring: #F5B800;
+
+  /* Charts */
+  --chart-1: #F5B800;   /* gold */
+  --chart-2: #15803D;   /* green */
+  --chart-3: #DC2626;   /* vermillion */
+  --chart-4: #1E1B4B;   /* indigo */
+  --chart-5: #D99E00;   /* gold pressed */
+
   --radius: 0.875rem;
-  --sidebar: oklch(0.98 0.005 300);
-  --sidebar-foreground: oklch(0.15 0.02 290);
-  --sidebar-primary: oklch(0.45 0.18 295);
-  --sidebar-primary-foreground: oklch(0.98 0 0);
-  --sidebar-accent: oklch(0.95 0.01 300);
-  --sidebar-accent-foreground: oklch(0.2 0.03 290);
-  --sidebar-border: oklch(0.9 0.01 300);
-  --sidebar-ring: oklch(0.45 0.18 295);
+
+  /* Sidebar (preserved structure) */
+  --sidebar: #FEF7E6;
+  --sidebar-foreground: #1E1B4B;
+  --sidebar-primary: #F5B800;
+  --sidebar-primary-foreground: #1E1B4B;
+  --sidebar-accent: #F0E5C8;
+  --sidebar-accent-foreground: #1E1B4B;
+  --sidebar-border: #F0E5C8;
+  --sidebar-ring: #F5B800;
+
+  /* Kente palette — direct access for custom utilities */
+  --kente-indigo: #1E1B4B;
+  --kente-green: #15803D;
+  --kente-vermillion: #DC2626;
+  --kente-gold: #F5B800;
+  --kente-gold-pressed: #D99E00;
+  --kente-cream: #FEF7E6;
 }
 
 .dark {
-  --background: oklch(0.15 0.02 290);
-  --foreground: oklch(0.95 0.005 300);
-  --card: oklch(0.2 0.02 290);
-  --card-foreground: oklch(0.95 0.005 300);
-  --popover: oklch(0.2 0.02 290);
-  --popover-foreground: oklch(0.95 0.005 300);
-  --primary: oklch(0.6 0.18 295);
-  --primary-foreground: oklch(0.98 0 0);
-  --secondary: oklch(0.7 0.16 75);
-  --secondary-foreground: oklch(0.15 0.02 290);
-  --muted: oklch(0.28 0.02 290);
-  --muted-foreground: oklch(0.65 0.02 290);
-  --accent: oklch(0.7 0.16 75);
-  --accent-foreground: oklch(0.15 0.02 290);
-  --destructive: oklch(0.55 0.22 25);
-  --destructive-foreground: oklch(0.98 0 0);
-  --border: oklch(0.28 0.02 290);
-  --input: oklch(0.28 0.02 290);
-  --ring: oklch(0.6 0.18 295);
-  --chart-1: oklch(0.6 0.18 295);
-  --chart-2: oklch(0.7 0.16 75);
-  --chart-3: oklch(0.6 0.15 320);
-  --chart-4: oklch(0.55 0.22 25);
-  --chart-5: oklch(0.65 0.12 180);
-  --sidebar: oklch(0.18 0.02 290);
-  --sidebar-foreground: oklch(0.95 0.005 300);
-  --sidebar-primary: oklch(0.6 0.18 295);
-  --sidebar-primary-foreground: oklch(0.98 0 0);
-  --sidebar-accent: oklch(0.28 0.02 290);
-  --sidebar-accent-foreground: oklch(0.95 0.005 300);
-  --sidebar-border: oklch(0.28 0.02 290);
-  --sidebar-ring: oklch(0.6 0.18 295);
+  --background: #1E1B4B;
+  --foreground: #FEF7E6;
+  --card: #2A2659;
+  --card-foreground: #FEF7E6;
+  --popover: #2A2659;
+  --popover-foreground: #FEF7E6;
+  --primary: #F5B800;
+  --primary-foreground: #1E1B4B;
+  --secondary: #15803D;
+  --secondary-foreground: #FEF7E6;
+  --muted: #2A2659;
+  --muted-foreground: #B8B5A0;
+  --accent: #DC2626;
+  --accent-foreground: #FEF7E6;
+  --destructive: #DC2626;
+  --destructive-foreground: #FEF7E6;
+  --border: #2A2659;
+  --input: #2A2659;
+  --ring: #F5B800;
+  --chart-1: #F5B800;
+  --chart-2: #15803D;
+  --chart-3: #DC2626;
+  --chart-4: #FEF7E6;
+  --chart-5: #D99E00;
+  --sidebar: #1E1B4B;
+  --sidebar-foreground: #FEF7E6;
+  --sidebar-primary: #F5B800;
+  --sidebar-primary-foreground: #1E1B4B;
+  --sidebar-accent: #2A2659;
+  --sidebar-accent-foreground: #FEF7E6;
+  --sidebar-border: #2A2659;
+  --sidebar-ring: #F5B800;
 }
 
 @theme inline {
@@ -115,6 +143,12 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-kente-indigo: var(--kente-indigo);
+  --color-kente-green: var(--kente-green);
+  --color-kente-vermillion: var(--kente-vermillion);
+  --color-kente-gold: var(--kente-gold);
+  --color-kente-gold-pressed: var(--kente-gold-pressed);
+  --color-kente-cream: var(--kente-cream);
 }
 
 @layer base {
@@ -144,11 +178,46 @@
   animation: slide-up 0.3s ease-out;
 }
 
-/* Gyema gradient — used on sign-in screen and key headers */
+/* Gyema header gradient — Indigo to Forest Green.
+   Replaces the old purple-to-violet gradient.
+   .gyema-gradient is preserved as the class name so existing
+   components don't break — only the colors change. */
 .gyema-gradient {
-  background: linear-gradient(135deg, oklch(0.45 0.18 295) 0%, oklch(0.6 0.15 320) 100%);
+  background: linear-gradient(135deg, #1E1B4B 0%, #15803D 100%);
 }
 
+/* Gold gradient — used on sign-in CTA and celebratory accents.
+   Solid-feeling gold with a subtle warm shift. */
 .gyema-gold-gradient {
-  background: linear-gradient(135deg, oklch(0.78 0.16 75) 0%, oklch(0.85 0.14 85) 100%);
+  background: linear-gradient(135deg, #F5B800 0%, #D99E00 100%);
+}
+
+/* Kente band — the signature 6px stripe under headers.
+   Asymmetric weights: Vermillion 20% / Gold 30% / Green 30% / Gold 20%.
+   Apply with: <div className="kente-band" /> */
+.kente-band {
+  height: 6px;
+  width: 100%;
+  background: linear-gradient(
+    to right,
+    #DC2626 0%,
+    #DC2626 20%,
+    #F5B800 20%,
+    #F5B800 50%,
+    #15803D 50%,
+    #15803D 80%,
+    #F5B800 80%,
+    #F5B800 100%
+  );
+}
+
+/* Celebratory burst — for success states.
+   Apply with: <div className="kente-burst" /> */
+.kente-burst {
+  background: radial-gradient(
+    circle at center,
+    #F5B800 0%,
+    #F5B800 30%,
+    transparent 70%
+  );
 }
