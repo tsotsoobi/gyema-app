@@ -88,7 +88,7 @@ export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
           icon="🪪"
           title="Pi Network KYC"
           subtitle="Verified by Pi Network — tap to complete or check status"
-          href="https://minepi.com/kyc"
+          href="https://kyc.pinet.com/user/status"
         />
       </div>
 
