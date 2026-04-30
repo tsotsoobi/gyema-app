@@ -92,12 +92,11 @@ export const authenticateWithPi = async (): Promise<PiUser> => {
 
 /**
  * Create a tiny test payment (0.001 testnet π) to satisfy Pi Develop's
- * "Process a Transaction" checklist item. Throws if SDK is unavailable
- * or the payment is cancelled/errors.
+ * "Process a Transaction" checklist item.
  *
- * Note: For Pi Develop checklist purposes, the payment only needs to
- * reach the SDK's createPayment flow. Server-side approval/completion
- * will be wired up properly when the backend is built (v2).
+ * The payment lifecycle requires server-side approval and completion via
+ * /api/payments/approve and /api/payments/complete. Without these, Pi
+ * times out the payment with "developer failed to approve" error.
  */
 export const createTestPayment = async (): Promise<string> => {
   if (!isPiSdkAvailable()) {
@@ -116,14 +115,44 @@ export const createTestPayment = async (): Promise<string> => {
         metadata: { type: "checklist_test", app: "gyema" },
       },
       {
-        onReadyForServerApproval: (paymentId: string) => {
+        onReadyForServerApproval: async (paymentId: string) => {
           console.log("[gyema] Payment ready for server approval:", paymentId)
-          // v1: no backend yet. Resolve here so the UI can confirm the
-          // SDK round-trip worked. v2 will POST to /api/payments/approve.
-          resolve(paymentId)
+          try {
+            const res = await fetch("/api/payments/approve", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ paymentId }),
+            })
+            if (!res.ok) {
+              const errText = await res.text()
+              console.error("[gyema] Approve endpoint failed:", errText)
+              reject(new Error("Server approval failed"))
+            }
+          } catch (err) {
+            console.error("[gyema] Approve fetch error:", err)
+            reject(err instanceof Error ? err : new Error("Approve fetch failed"))
+          }
         },
-        onReadyForServerCompletion: (paymentId: string, txid: string) => {
-          console.log("[gyema] Payment completed:", paymentId, txid)
+        onReadyForServerCompletion: async (paymentId: string, txid: string) => {
+          console.log("[gyema] Payment completed by SDK:", paymentId, txid)
+          try {
+            const res = await fetch("/api/payments/complete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ paymentId, txid }),
+            })
+            if (!res.ok) {
+              const errText = await res.text()
+              console.error("[gyema] Complete endpoint failed:", errText)
+              reject(new Error("Server completion failed"))
+              return
+            }
+            // Resolve only after server confirms completion.
+            resolve(paymentId)
+          } catch (err) {
+            console.error("[gyema] Complete fetch error:", err)
+            reject(err instanceof Error ? err : new Error("Complete fetch failed"))
+          }
         },
         onCancel: (paymentId: string) => {
           console.log("[gyema] Payment cancelled:", paymentId)
