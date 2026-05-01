@@ -40,7 +40,7 @@ export function SignIn({ onSignedIn, onContinueAsGuest }: SignInProps) {
       <Card className="w-full max-w-sm overflow-hidden shadow-xl">
         <div className="p-8 pb-0 space-y-6">
           <div className="flex flex-col items-center space-y-3">
-            <div className="w-20 h-20 rounded-2xl gyema-gold-gradient flex items-center justify-center text-4xl shadow-lg">
+            <div className="w-20 h-20 rounded-2xl bg-secondary flex items-center justify-center text-4xl shadow-lg">
               📦
             </div>
             <h1 className="text-3xl font-bold tracking-tight">Gyema</h1>
