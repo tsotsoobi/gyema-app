@@ -44,7 +44,7 @@ export function SignIn({ onSignedIn, onContinueAsGuest }: SignInProps) {
               <img
                 src="/gyema-hand.png"
                 alt="Gyema"
-                className="w-14 h-14 object-contain"
+                className="w-16 h-16 object-contain"
               />
             </div>
             <h1 className="text-3xl font-bold tracking-tight">Gyema</h1>
