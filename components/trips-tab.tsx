@@ -1,109 +1,157 @@
-"use client"
+// Listings store for Gyema v1.
+//
+// IMPORTANT — v1 limitation: listings are saved in the user's own device
+// localStorage. This means a trip posted by Pioneer A is NOT visible to
+// Pioneer B on a different device. v1 ships this way to keep the app
+// simple enough for Pi App Studio submission; v2 replaces this with a
+// real backend (Supabase planned) so listings sync across users.
+//
+// All public functions in this file return what they would return with
+// a real backend, so swapping the storage layer in v2 won't change any
+// component code.
 
-import { useState } from "react"
-import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
-import { Badge } from "@/components/ui/badge"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  createTrip,
-  getListingsByUser,
-  type PackageSize,
-} from "@/lib/listings"
-import type { PiUser, UserRole } from "@/lib/pi-network"
+export type ListingKind = "trip" | "package"
+export type PackageSize = "envelope" | "small" | "medium" | "large"
+export type ListingStatus = "open" | "matched" | "completed" | "cancelled"
 
-interface TripsTabProps {
-  user: PiUser
-  role: UserRole
-  refreshKey: number
-  onCreated: () => void
+export type TripListing = {
+  id: string
+  kind: "trip"
+  fromCity: string
+  toCity: string
+  travelDate: string
+  capacity: PackageSize
+  pricePi: number
+  notes?: string
+  postedById: string
+  postedByUsername: string
+  whatsapp: string
+  status: ListingStatus
+  trackingId: string
+  createdAt: string
 }
 
-export function TripsTab({ user, role, refreshKey, onCreated }: TripsTabProps) {
-  const [showForm, setShowForm] = useState(false)
+export type PackageListing = {
+  id: string
+  kind: "package"
+  fromCity: string
+  toCity: string
+  deliverBy: string
+  size: PackageSize
+  description: string
+  offerPi: number
+  postedById: string
+  postedByUsername: string
+  whatsapp: string
+  status: ListingStatus
+  trackingId: string
+  createdAt: string
+}
 
-  const myListings = getListingsByUser(user.uid)
-  const myTrips = myListings.filter((l) => l.kind === "trip")
-  const myPackages = myListings.filter((l) => l.kind === "package")
+export type Listing = TripListing | PackageListing
 
-  const visibleListings = role === "traveller" ? myTrips : myPackages
+const STORAGE_KEY = "gyema-listings-v1"
 
-  return (
-    <div className="px-4 py-4 space-y-3" data-refresh={refreshKey}>
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">My Activity</h2>
-        <Badge variant="secondary" className="text-xs">
-          {visibleListings.length}{" "}
-          {role === "traveller" ? "trips" : "deliveries"}
-        </Badge>
-      </div>
+// Tracking ID format matches the Railway design preview: GYM-XXXXXX (6 hex chars).
+const generateTrackingId = (): string => {
+  const chars = "0123456789ABCDEF"
+  let suffix = ""
+  for (let i = 0; i < 5; i++) {
+    suffix += chars[Math.floor(Math.random() * chars.length)]
+  }
+  return `GYM-000${suffix}`
+}
 
-      {role === "traveller" && (
-        <Button
-          variant={showForm ? "outline" : "default"}
-          className="w-full h-12 text-base font-semibold"
-          onClick={() => setShowForm(!showForm)}
-        >
-          {showForm ? "Cancel" : "✈️ Register a Trip"}
-        </Button>
-      )}
+const generateId = (): string => {
+  return `listing_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`
+}
 
-      {role === "traveller" && showForm && (
-        <RegisterTripForm
-          user={user}
-          onDone={() => {
-            setShowForm(false)
-            onCreated()
-          }}
-        />
-      )}
+const loadAll = (): Listing[] => {
+  if (typeof window === "undefined") return []
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as Listing[]) : []
+  } catch {
+    return []
+  }
+}
 
-      <div className="space-y-2 pt-2">
-        <h3 className="text-sm font-medium text-muted-foreground">
-          Active {role === "traveller" ? "Trips" : "Deliveries"}
-        </h3>
+const saveAll = (listings: Listing[]) => {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(listings))
+  } catch (e) {
+    console.warn("[gyema] Could not persist listings:", e)
+  }
+}
 
-        {visibleListings.length === 0 ? (
-          <Card className="p-8 text-center space-y-2">
-            <div className="text-4xl">📭</div>
-            <p className="text-sm font-medium">Nothing here yet</p>
-            <p className="text-xs text-muted-foreground">
-              {role === "traveller"
-                ? "Register your first trip to start earning Pi."
-                : "Post a delivery from the Home tab."}
-            </p>
-          </Card>
-        ) : (
-          visibleListings.map((l) => (
-            <Card key={l.id} className="p-4 space-y-2">
-              <div className="flex items-start justify-between gap-2">
-                <p className="font-semibold text-sm">
-                  {l.fromCity} → {l.toCity}
-                </p>
-                <Badge variant="outline" className="text-[10px]">
-                  {l.status}
-                </Badge>
-              </div>
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">
-                  📅{" "}
-                  {formatDate(
-                    l.kind === "trip" ? l.travelDate : l.deliverBy
-                  )}
-                </span>
-                <span className="font-bold text-primary">
-                  {l.kind === "trip" ? l.pricePi : l.offerPi} π
-                </span>
-              </div>
-              <p className="font-mono text-[10px] text-muted-foreground">
-                {l.trackingId}
-              </p
+export const getAllListings = (): Listing[] => {
+  return loadAll().sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  )
+}
+
+export const getListingsByUser = (userId: string): Listing[] => {
+  return getAllListings().filter((l) => l.postedById === userId)
+}
+
+export const getOpenListings = (): Listing[] => {
+  return getAllListings().filter((l) => l.status === "open")
+}
+
+export const getListingByTrackingId = (trackingId: string): Listing | null => {
+  const normalized = trackingId.trim().toUpperCase()
+  return getAllListings().find((l) => l.trackingId === normalized) ?? null
+}
+
+export type CreateTripInput = Omit<
+  TripListing,
+  "id" | "kind" | "status" | "trackingId" | "createdAt"
+>
+
+export const createTrip = (input: CreateTripInput): TripListing => {
+  const listing: TripListing = {
+    ...input,
+    id: generateId(),
+    kind: "trip",
+    status: "open",
+    trackingId: generateTrackingId(),
+    createdAt: new Date().toISOString(),
+  }
+  const all = loadAll()
+  all.unshift(listing)
+  saveAll(all)
+  return listing
+}
+
+export type CreatePackageInput = Omit<
+  PackageListing,
+  "id" | "kind" | "status" | "trackingId" | "createdAt"
+>
+
+export const createPackage = (input: CreatePackageInput): PackageListing => {
+  const listing: PackageListing = {
+    ...input,
+    id: generateId(),
+    kind: "package",
+    status: "open",
+    trackingId: generateTrackingId(),
+    createdAt: new Date().toISOString(),
+  }
+  const all = loadAll()
+  all.unshift(listing)
+  saveAll(all)
+  return listing
+}
+
+export const updateListingStatus = (
+  id: string,
+  status: ListingStatus
+): Listing | null => {
+  const all = loadAll()
+  const idx = all.findIndex((l) => l.id === id)
+  if (idx === -1) return null
+  all[idx].status = status
+  saveAll(all)
+  return all[idx]
+}
