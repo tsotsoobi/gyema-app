@@ -9,16 +9,16 @@
      Forest Green for the header, Cream for warmth. */
 
   /* Surfaces */
-  --background: #FEF7E6;        /* cream */
-  --foreground: #1E1B4B;        /* indigo */
-  --card: #FFFFFF;              /* white cards lift on cream */
+  --background: #FEF7E6;
+  --foreground: #1E1B4B;
+  --card: #FFFFFF;
   --card-foreground: #1E1B4B;
   --popover: #FFFFFF;
   --popover-foreground: #1E1B4B;
 
   /* Primary action: GOLD */
   --primary: #F5B800;
-  --primary-foreground: #1E1B4B;  /* indigo text on gold — readable, bold */
+  --primary-foreground: #1E1B4B;
 
   /* Secondary: Forest Green */
   --secondary: #15803D;
@@ -32,7 +32,7 @@
   --accent: #DC2626;
   --accent-foreground: #FEF7E6;
 
-  /* Destructive (Disconnect button) — keep red, slightly deeper */
+  /* Destructive (Disconnect button) */
   --destructive: #DC2626;
   --destructive-foreground: #FEF7E6;
 
@@ -42,15 +42,15 @@
   --ring: #F5B800;
 
   /* Charts */
-  --chart-1: #F5B800;   /* gold */
-  --chart-2: #15803D;   /* green */
-  --chart-3: #DC2626;   /* vermillion */
-  --chart-4: #1E1B4B;   /* indigo */
-  --chart-5: #D99E00;   /* gold pressed */
+  --chart-1: #F5B800;
+  --chart-2: #15803D;
+  --chart-3: #DC2626;
+  --chart-4: #1E1B4B;
+  --chart-5: #D99E00;
 
   --radius: 0.875rem;
 
-  /* Sidebar (preserved structure) */
+  /* Sidebar */
   --sidebar: #FEF7E6;
   --sidebar-foreground: #1E1B4B;
   --sidebar-primary: #F5B800;
@@ -179,21 +179,19 @@
 }
 
 /* Gyema header gradient — Indigo to Forest Green.
-   Replaces the old purple-to-violet gradient.
-   .gyema-gradient is preserved as the class name so existing
-   components don't break — only the colors change. */
+   Replaces the old purple-to-violet gradient. */
 .gyema-gradient {
   background: linear-gradient(135deg, #1E1B4B 0%, #15803D 100%);
 }
 
-/* Gold gradient — used on sign-in CTA and celebratory accents.
-   Solid-feeling gold with a subtle warm shift. */
+/* Gold gradient — used on sign-in CTA and celebratory accents. */
 .gyema-gold-gradient {
   background: linear-gradient(135deg, #F5B800 0%, #D99E00 100%);
 }
 
-/* Kente band — the signature 6px stripe under headers.
-   Asymmetric weights: Vermillion 20% / Gold 30% / Green 30% / Gold 20%.
+/* Ashanti band — signature 6px ribbon under headers.
+   Asymmetric red/gold weights: 25% / 35% / 25% / 15%.
+   Removes green so the header gradient carries the green note alone.
    Apply with: <div className="kente-band" /> */
 .kente-band {
   height: 6px;
@@ -201,18 +199,17 @@
   background: linear-gradient(
     to right,
     #DC2626 0%,
-    #DC2626 20%,
-    #F5B800 20%,
-    #F5B800 50%,
-    #15803D 50%,
-    #15803D 80%,
-    #F5B800 80%,
+    #DC2626 25%,
+    #F5B800 25%,
+    #F5B800 60%,
+    #DC2626 60%,
+    #DC2626 85%,
+    #F5B800 85%,
     #F5B800 100%
   );
 }
 
-/* Celebratory burst — for success states.
-   Apply with: <div className="kente-burst" /> */
+/* Celebratory burst — for success states. */
 .kente-burst {
   background: radial-gradient(
     circle at center,
