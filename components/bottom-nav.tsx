@@ -27,7 +27,7 @@ export function BottomNav({ active, onChange }: BottomNavProps) {
             className={cn(
               "flex flex-col items-center gap-0.5 px-3 py-2 rounded-lg transition-colors min-w-16",
               active === tab.id
-                ? "text-primary"
+                ? "text-accent font-semibold"
                 : "text-muted-foreground hover:text-foreground"
             )}
           >
