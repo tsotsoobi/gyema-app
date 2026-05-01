@@ -25,6 +25,7 @@ export type TripListing = {
   notes?: string
   postedById: string
   postedByUsername: string
+  whatsapp: string
   status: ListingStatus
   trackingId: string
   createdAt: string
@@ -41,6 +42,7 @@ export type PackageListing = {
   offerPi: number
   postedById: string
   postedByUsername: string
+  whatsapp: string
   status: ListingStatus
   trackingId: string
   createdAt: string
