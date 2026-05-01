@@ -48,7 +48,6 @@ export function HomeTab({ role, user, refreshKey, onListingCreated }: HomeTabPro
   )
 }
 
-// Traveller view: Available Jobs (packages senders need delivered)
 function TravellerHome({
   currentUserId,
   refreshKey,
@@ -124,7 +123,6 @@ function TravellerHome({
   )
 }
 
-// Sender view: Available Trips feed + collapsible Post a Delivery form
 function SenderHome({
   user,
   refreshKey,
@@ -142,6 +140,7 @@ function SenderHome({
   const [toCity, setToCity] = useState("")
   const [deliverBy, setDeliverBy] = useState("")
   const [offer, setOffer] = useState("")
+  const [whatsapp, setWhatsapp] = useState("")
   const [submitted, setSubmitted] = useState<string | null>(null)
 
   const trips = getOpenListings().filter(
@@ -154,7 +153,8 @@ function SenderHome({
     fromCity.trim() &&
     toCity.trim() &&
     deliverBy &&
-    offer
+    offer &&
+    whatsapp
 
   const handleSubmit = () => {
     if (!valid) return
@@ -165,6 +165,7 @@ function SenderHome({
       toCity: toCity.trim(),
       deliverBy,
       offerPi: parseFloat(offer),
+      whatsapp: whatsapp.trim(),
       postedById: user.uid,
       postedByUsername: user.username,
     })
@@ -175,6 +176,7 @@ function SenderHome({
     setToCity("")
     setDeliverBy("")
     setOffer("")
+    setWhatsapp("")
     setShowForm(false)
     onCreated()
   }
@@ -225,149 +227,3 @@ function SenderHome({
               onClick={() => setSelected(l)}
               className="w-full text-left"
             >
-              <Card className="p-4 space-y-2 hover:border-primary transition-colors">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-sm truncate">
-                      {l.fromCity} → {l.toCity}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                      {l.kind === "trip" ? l.notes || "Available for delivery" : ""}
-                    </p>
-                  </div>
-                  <div className="gyema-gold-gradient rounded-md px-2.5 py-1 text-xs font-bold text-amber-950 whitespace-nowrap">
-                    {l.kind === "trip" ? l.pricePi : 0} π
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>📅 {formatDate(l.kind === "trip" ? l.travelDate : "")}</span>
-                  <span>·</span>
-                  <span>📦 {l.kind === "trip" ? l.capacity : ""}</span>
-                  <span>·</span>
-                  <span className="font-mono text-[10px]">{l.trackingId}</span>
-                </div>
-              </Card>
-            </button>
-          ))}
-        </div>
-      )}
-
-      <Button
-        variant={showForm ? "outline" : "default"}
-        className="w-full h-12 text-base font-semibold"
-        onClick={() => setShowForm(!showForm)}
-      >
-        {showForm ? "Cancel" : "📦 Post a Delivery"}
-      </Button>
-
-      {showForm && (
-        <Card className="p-4 space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="desc">Package Description</Label>
-            <Textarea
-              id="desc"
-              placeholder="e.g. sealed box of phone accessories"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={2}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="size">Package Size</Label>
-            <Select value={size} onValueChange={(v) => setSize(v as PackageSize)}>
-              <SelectTrigger id="size">
-                <SelectValue placeholder="Select size" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="envelope">Envelope / documents</SelectItem>
-                <SelectItem value="small">Small (under 2 kg)</SelectItem>
-                <SelectItem value="medium">Medium (2–10 kg)</SelectItem>
-                <SelectItem value="large">Large (10 kg+)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="from">From City</Label>
-              <Input
-                id="from"
-                placeholder="Accra"
-                value={fromCity}
-                onChange={(e) => setFromCity(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="to">To City</Label>
-              <Input
-                id="to"
-                placeholder="Tamale"
-                value={toCity}
-                onChange={(e) => setToCity(e.target.value)}
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="deadline">Deadline</Label>
-            <Input
-              id="deadline"
-              type="date"
-              value={deliverBy}
-              onChange={(e) => setDeliverBy(e.target.value)}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="offer">Your Offer (π Pi)</Label>
-            <Input
-              id="offer"
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="0.1"
-              placeholder="5"
-              value={offer}
-              onChange={(e) => setOffer(e.target.value)}
-            />
-          </div>
-
-          <Button
-            className="w-full h-12 text-base font-semibold"
-            onClick={handleSubmit}
-            disabled={!valid}
-          >
-            Post Delivery Request
-          </Button>
-        </Card>
-      )}
-
-      <Card className="p-4 bg-amber-50 border-amber-200">
-        <p className="text-xs text-amber-900 leading-relaxed">
-          ⚠️ Never send illegal items, cash, or anything you wouldn't trust a stranger
-          with. Gyema is not responsible for the contents of packages.
-        </p>
-      </Card>
-
-      {selected && (
-        <ListingDetailSheet
-          listing={selected}
-          onClose={() => setSelected(null)}
-        />
-      )}
-    </div>
-  )
-}
-
-function formatDate(iso: string): string {
-  if (!iso) return "—"
-  try {
-    return new Date(iso).toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-    })
-  } catch {
-    return iso
-  }
-}
