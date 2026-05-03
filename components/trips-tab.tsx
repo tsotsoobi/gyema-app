@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -15,10 +15,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import {
-  createTrip,
-  getListingsByUser,
+  type Listing,
   type PackageSize,
 } from "@/lib/listings"
+import {
+  createTripAsync,
+  getListingsByUserAsync,
+} from "@/lib/listings-async"
 import type { PiUser, UserRole } from "@/lib/pi-network"
 
 interface TripsTabProps {
@@ -30,8 +33,19 @@ interface TripsTabProps {
 
 export function TripsTab({ user, role, refreshKey, onCreated }: TripsTabProps) {
   const [showForm, setShowForm] = useState(false)
+  const [myListings, setMyListings] = useState<Listing[]>([])
 
-  const myListings = getListingsByUser(user.uid)
+  useEffect(() => {
+    let cancelled = false
+    getListingsByUserAsync(user.uid).then((all) => {
+      if (cancelled) return
+      setMyListings(all)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [user.uid, refreshKey])
+
   const myTrips = myListings.filter((l) => l.kind === "trip")
   const myPackages = myListings.filter((l) => l.kind === "package")
 
@@ -129,23 +143,32 @@ function RegisterTripForm({
   const [pricePi, setPricePi] = useState("")
   const [notes, setNotes] = useState("")
   const [whatsapp, setWhatsapp] = useState("")
+  const [submitting, setSubmitting] = useState(false)
 
   const valid = fromCity && toCity && travelDate && capacity && pricePi && whatsapp
 
-  const handleSubmit = () => {
-    if (!valid) return
-    createTrip({
-      fromCity: fromCity.trim(),
-      toCity: toCity.trim(),
-      travelDate,
-      capacity: capacity as PackageSize,
-      pricePi: parseFloat(pricePi),
-      notes: notes.trim(),
-      whatsapp: whatsapp.trim(),
-      postedById: user.uid,
-      postedByUsername: user.username,
-    })
-    onDone()
+  const handleSubmit = async () => {
+    if (!valid || submitting) return
+    setSubmitting(true)
+    try {
+      await createTripAsync({
+        fromCity: fromCity.trim(),
+        toCity: toCity.trim(),
+        travelDate,
+        capacity: capacity as PackageSize,
+        pricePi: parseFloat(pricePi),
+        notes: notes.trim(),
+        whatsapp: whatsapp.trim(),
+        postedById: user.uid,
+        postedByUsername: user.username,
+      })
+      onDone()
+    } catch (e) {
+      console.error("[gyema] Could not register trip:", e)
+      alert("Could not register your trip. Check your connection and try again.")
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -238,8 +261,12 @@ function RegisterTripForm({
         />
       </div>
 
-      <Button className="w-full h-11 font-semibold" onClick={handleSubmit} disabled={!valid}>
-        Post Trip
+      <Button
+        className="w-full h-11 font-semibold"
+        onClick={handleSubmit}
+        disabled={!valid || submitting}
+      >
+        {submitting ? "Posting..." : "Post Trip"}
       </Button>
     </Card>
   )
