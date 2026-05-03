@@ -152,6 +152,7 @@ function SenderHome({
   const [toCity, setToCity] = useState("")
   const [deliverBy, setDeliverBy] = useState("")
   const [offer, setOffer] = useState("")
+  const [whatsapp, setWhatsapp] = useState("")
   const [submitted, setSubmitted] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [trips, setTrips] = useState<Listing[]>([])
@@ -173,7 +174,8 @@ function SenderHome({
     fromCity.trim() &&
     toCity.trim() &&
     deliverBy &&
-    offer
+    offer &&
+    whatsapp.trim()
 
   const handleSubmit = async () => {
     if (!valid || submitting) return
@@ -188,7 +190,7 @@ function SenderHome({
         offerPi: parseFloat(offer),
         postedById: user.uid,
         postedByUsername: user.username,
-        whatsapp: "",
+        whatsapp: whatsapp.trim(),
       })
       setSubmitted(listing.trackingId)
       setDescription("")
@@ -197,6 +199,7 @@ function SenderHome({
       setToCity("")
       setDeliverBy("")
       setOffer("")
+      setWhatsapp("")
       setShowForm(false)
       onCreated()
     } catch (e) {
@@ -359,6 +362,21 @@ function SenderHome({
               value={offer}
               onChange={(e) => setOffer(e.target.value)}
             />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="s-whatsapp">WhatsApp Number</Label>
+            <Input
+              id="s-whatsapp"
+              type="tel"
+              inputMode="tel"
+              placeholder="+233 24 123 4567"
+              value={whatsapp}
+              onChange={(e) => setWhatsapp(e.target.value)}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Travellers will use this to coordinate with you.
+            </p>
           </div>
 
           <Button
