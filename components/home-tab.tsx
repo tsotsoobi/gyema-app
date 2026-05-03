@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -20,6 +20,10 @@ import {
   type Listing,
   type PackageSize,
 } from "@/lib/listings"
+import {
+  createPackageAsync,
+  getOpenListingsAsync,
+} from "@/lib/listings-async"
 import type { PiUser, UserRole } from "@/lib/pi-network"
 import { ListingDetailSheet } from "./listing-detail-sheet"
 
@@ -49,6 +53,7 @@ export function HomeTab({ role, user, refreshKey, onListingCreated }: HomeTabPro
 }
 
 // Traveller view: Available Jobs (packages senders need delivered)
+// NOTE: Still uses sync getOpenListings (localStorage). Migrated in Commit 4b.
 function TravellerHome({
   currentUserId,
   refreshKey,
@@ -143,10 +148,19 @@ function SenderHome({
   const [deliverBy, setDeliverBy] = useState("")
   const [offer, setOffer] = useState("")
   const [submitted, setSubmitted] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [trips, setTrips] = useState<Listing[]>([])
 
-  const trips = getOpenListings().filter(
-    (l) => l.kind === "trip" && l.postedById !== user.uid
-  )
+  useEffect(() => {
+    let cancelled = false
+    getOpenListingsAsync().then((all) => {
+      if (cancelled) return
+      setTrips(all.filter((l) => l.kind === "trip" && l.postedById !== user.uid))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [user.uid, refreshKey])
 
   const valid =
     description.trim() &&
@@ -156,27 +170,36 @@ function SenderHome({
     deliverBy &&
     offer
 
-  const handleSubmit = () => {
-    if (!valid) return
-    const listing = createPackage({
-      description: description.trim(),
-      size: size as PackageSize,
-      fromCity: fromCity.trim(),
-      toCity: toCity.trim(),
-      deliverBy,
-      offerPi: parseFloat(offer),
-      postedById: user.uid,
-      postedByUsername: user.username,
-    })
-    setSubmitted(listing.trackingId)
-    setDescription("")
-    setSize("")
-    setFromCity("")
-    setToCity("")
-    setDeliverBy("")
-    setOffer("")
-    setShowForm(false)
-    onCreated()
+  const handleSubmit = async () => {
+    if (!valid || submitting) return
+    setSubmitting(true)
+    try {
+      const listing = await createPackageAsync({
+        description: description.trim(),
+        size: size as PackageSize,
+        fromCity: fromCity.trim(),
+        toCity: toCity.trim(),
+        deliverBy,
+        offerPi: parseFloat(offer),
+        postedById: user.uid,
+        postedByUsername: user.username,
+        whatsapp: "",
+      })
+      setSubmitted(listing.trackingId)
+      setDescription("")
+      setSize("")
+      setFromCity("")
+      setToCity("")
+      setDeliverBy("")
+      setOffer("")
+      setShowForm(false)
+      onCreated()
+    } catch (e) {
+      console.error("[gyema] Could not post delivery:", e)
+      alert("Could not post your delivery. Check your connection and try again.")
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   if (submitted) {
@@ -336,9 +359,9 @@ function SenderHome({
           <Button
             className="w-full h-12 text-base font-semibold"
             onClick={handleSubmit}
-            disabled={!valid}
+            disabled={!valid || submitting}
           >
-            Post Delivery Request
+            {submitting ? "Posting..." : "Post Delivery Request"}
           </Button>
         </Card>
       )}
