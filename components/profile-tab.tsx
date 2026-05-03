@@ -1,9 +1,10 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { getListingsByUser } from "@/lib/listings"
+import { type Listing } from "@/lib/listings"
+import { getListingsByUserAsync } from "@/lib/listings-async"
 import {
   type PiUser,
   createTestPayment,
@@ -17,7 +18,19 @@ interface ProfileTabProps {
 }
 
 export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
-  const listings = getListingsByUser(user.uid)
+  const [listings, setListings] = useState<Listing[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    getListingsByUserAsync(user.uid).then((all) => {
+      if (cancelled) return
+      setListings(all)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [user.uid, refreshKey])
+
   const completedCount = listings.filter((l) => l.status === "completed").length
 
   const [txStatus, setTxStatus] = useState<"idle" | "pending" | "success" | "error">("idle")
