@@ -15,8 +15,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import {
-  createPackage,
-  getOpenListings,
   type Listing,
   type PackageSize,
 } from "@/lib/listings"
@@ -53,7 +51,6 @@ export function HomeTab({ role, user, refreshKey, onListingCreated }: HomeTabPro
 }
 
 // Traveller view: Available Jobs (packages senders need delivered)
-// NOTE: Still uses sync getOpenListings (localStorage). Migrated in Commit 4b.
 function TravellerHome({
   currentUserId,
   refreshKey,
@@ -62,10 +59,18 @@ function TravellerHome({
   refreshKey: number
 }) {
   const [selected, setSelected] = useState<Listing | null>(null)
+  const [listings, setListings] = useState<Listing[]>([])
 
-  const listings = getOpenListings().filter(
-    (l) => l.kind === "package" && l.postedById !== currentUserId
-  )
+  useEffect(() => {
+    let cancelled = false
+    getOpenListingsAsync().then((all) => {
+      if (cancelled) return
+      setListings(all.filter((l) => l.kind === "package" && l.postedById !== currentUserId))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [currentUserId, refreshKey])
 
   return (
     <div className="px-4 py-4 space-y-3" data-refresh={refreshKey}>
