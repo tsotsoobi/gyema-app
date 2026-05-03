@@ -6,16 +6,26 @@ import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { getListingByTrackingId, type Listing } from "@/lib/listings"
+import { type Listing } from "@/lib/listings"
+import { getListingByTrackingIdAsync } from "@/lib/listings-async"
 
 export function TrackTab() {
   const [trackingId, setTrackingId] = useState("")
   const [result, setResult] = useState<Listing | null | "not-found">(null)
+  const [searching, setSearching] = useState(false)
 
-  const handleTrack = () => {
-    if (!trackingId.trim()) return
-    const found = getListingByTrackingId(trackingId)
-    setResult(found ?? "not-found")
+  const handleTrack = async () => {
+    if (!trackingId.trim() || searching) return
+    setSearching(true)
+    try {
+      const found = await getListingByTrackingIdAsync(trackingId)
+      setResult(found ?? "not-found")
+    } catch (e) {
+      console.error("[gyema] Tracking lookup failed:", e)
+      alert("Could not look up that tracking ID. Check your connection and try again.")
+    } finally {
+      setSearching(false)
+    }
   }
 
   return (
@@ -42,8 +52,12 @@ export function TrackTab() {
           />
         </div>
 
-        <Button className="w-full h-11" onClick={handleTrack}>
-          Track
+        <Button
+          className="w-full h-11"
+          onClick={handleTrack}
+          disabled={!trackingId.trim() || searching}
+        >
+          {searching ? "Searching..." : "Track"}
         </Button>
 
         <p className="text-xs text-center text-muted-foreground">
@@ -57,8 +71,8 @@ export function TrackTab() {
             No listing found with that tracking ID.
           </p>
           <p className="text-xs text-red-700 mt-1">
-            v1 note: tracking IDs are visible only on the device that posted them.
-            Cross-device tracking comes in v2 with the backend.
+            Double-check the ID. Tracking IDs are case-insensitive but every
+            character matters.
           </p>
         </Card>
       )}
