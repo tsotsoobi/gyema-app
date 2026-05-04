@@ -31,6 +31,11 @@ interface TripsTabProps {
   onCreated: () => void
 }
 
+// Statuses considered "past" — listings the user has finished with.
+// 'expired' is set automatically by expireStaleListingsAsync.
+// 'completed' is reserved for the v2 confirmation flow.
+const PAST_STATUSES = new Set(["expired", "completed"])
+
 export function TripsTab({ user, role, refreshKey, onCreated }: TripsTabProps) {
   const [showForm, setShowForm] = useState(false)
   const [myListings, setMyListings] = useState<Listing[]>([])
@@ -46,17 +51,25 @@ export function TripsTab({ user, role, refreshKey, onCreated }: TripsTabProps) {
     }
   }, [user.uid, refreshKey])
 
+  // Split by kind first (role-appropriate listings only),
+  // then by active/past based on status.
   const myTrips = myListings.filter((l) => l.kind === "trip")
   const myPackages = myListings.filter((l) => l.kind === "package")
-
   const visibleListings = role === "traveller" ? myTrips : myPackages
+
+  const activeListings = visibleListings.filter(
+    (l) => !PAST_STATUSES.has(l.status)
+  )
+  const pastListings = visibleListings.filter((l) =>
+    PAST_STATUSES.has(l.status)
+  )
 
   return (
     <div className="px-4 py-4 space-y-3" data-refresh={refreshKey}>
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">My Activity</h2>
         <Badge variant="secondary" className="text-xs">
-          {visibleListings.length}{" "}
+          {activeListings.length}{" "}
           {role === "traveller" ? "trips" : "deliveries"}
         </Badge>
       </div>
@@ -81,12 +94,13 @@ export function TripsTab({ user, role, refreshKey, onCreated }: TripsTabProps) {
         />
       )}
 
+      {/* Active section */}
       <div className="space-y-2 pt-2">
         <h3 className="text-sm font-medium text-muted-foreground">
           Active {role === "traveller" ? "Trips" : "Deliveries"}
         </h3>
 
-        {visibleListings.length === 0 ? (
+        {activeListings.length === 0 ? (
           <Card className="p-8 text-center space-y-2">
             <div className="text-4xl">📭</div>
             <p className="text-sm font-medium">Nothing here yet</p>
@@ -97,35 +111,85 @@ export function TripsTab({ user, role, refreshKey, onCreated }: TripsTabProps) {
             </p>
           </Card>
         ) : (
-          visibleListings.map((l) => (
-            <Card key={l.id} className="p-4 space-y-2">
-              <div className="flex items-start justify-between gap-2">
-                <p className="font-semibold text-sm">
-                  {l.fromCity} → {l.toCity}
-                </p>
-                <Badge variant="outline" className="text-[10px]">
-                  {l.status}
-                </Badge>
-              </div>
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">
-                  📅{" "}
-                  {formatDate(
-                    l.kind === "trip" ? l.travelDate : l.deliverBy
-                  )}
-                </span>
-                <span className="font-bold text-primary">
-                  {l.kind === "trip" ? l.pricePi : l.offerPi} π
-                </span>
-              </div>
-              <p className="font-mono text-[10px] text-muted-foreground">
-                {l.trackingId}
-              </p>
-            </Card>
+          activeListings.map((l) => (
+            <ListingCard key={l.id} listing={l} muted={false} />
           ))
         )}
       </div>
+
+      {/* Past section — only renders if user has any past listings */}
+      {pastListings.length > 0 && (
+        <div className="space-y-2 pt-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium text-muted-foreground">
+              Past {role === "traveller" ? "Trips" : "Deliveries"}
+            </h3>
+            <span className="text-[11px] text-muted-foreground">
+              {pastListings.length}
+            </span>
+          </div>
+
+          {pastListings.map((l) => (
+            <ListingCard key={l.id} listing={l} muted={true} />
+          ))}
+        </div>
+      )}
     </div>
+  )
+}
+
+// Single card component — same layout for active and past, but
+// muted=true visually de-emphasises the card so the user can tell
+// at a glance that it's history.
+function ListingCard({
+  listing,
+  muted,
+}: {
+  listing: Listing
+  muted: boolean
+}) {
+  return (
+    <Card
+      className={`p-4 space-y-2 ${
+        muted ? "bg-muted/40 border-muted opacity-70" : ""
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <p
+          className={`font-semibold text-sm ${
+            muted ? "text-muted-foreground" : ""
+          }`}
+        >
+          {listing.fromCity} → {listing.toCity}
+        </p>
+        <Badge
+          variant="outline"
+          className={`text-[10px] ${
+            muted ? "text-muted-foreground" : ""
+          }`}
+        >
+          {listing.status}
+        </Badge>
+      </div>
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-muted-foreground">
+          📅{" "}
+          {formatDate(
+            listing.kind === "trip" ? listing.travelDate : listing.deliverBy
+          )}
+        </span>
+        <span
+          className={`font-bold ${
+            muted ? "text-muted-foreground" : "text-primary"
+          }`}
+        >
+          {listing.kind === "trip" ? listing.pricePi : listing.offerPi} π
+        </span>
+      </div>
+      <p className="font-mono text-[10px] text-muted-foreground">
+        {listing.trackingId}
+      </p>
+    </Card>
   )
 }
 
