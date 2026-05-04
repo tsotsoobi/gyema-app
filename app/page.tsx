@@ -17,6 +17,7 @@ import {
   type PiUser,
   type UserRole,
 } from "@/lib/pi-network"
+import { expireStaleListingsAsync } from "@/lib/listings-async"
 
 export default function Gyema() {
   const [user, setUser] = useState<PiUser | null>(null)
@@ -32,6 +33,14 @@ export default function Gyema() {
     if (storedUser) setUser(storedUser)
     if (storedRole) setRole(storedRole)
     setHydrated(true)
+  }, [])
+
+  // Sweep stale 'open' listings on app load.
+  // Runs once per session, fire-and-forget, errors logged to console.
+  useEffect(() => {
+    expireStaleListingsAsync().catch((err) => {
+      console.error("[gyema] expireStaleListingsAsync threw:", err)
+    })
   }, [])
 
   const handleSignedIn = (signedInUser: PiUser) => {
