@@ -19,19 +19,28 @@ interface ProfileTabProps {
 
 export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
   const [listings, setListings] = useState<Listing[]>([])
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
-    getListingsByUserAsync(user.uid).then((all) => {
-      if (cancelled) return
-      setListings(all)
-    })
+    setLoading(true)
+    getListingsByUserAsync(user.uid)
+      .then((all) => {
+        if (cancelled) return
+        setListings(all)
+        setLoading(false)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setLoading(false)
+      })
     return () => {
       cancelled = true
     }
   }, [user.uid, refreshKey])
 
   const completedCount = listings.filter((l) => l.status === "completed").length
+  const tripCount = listings.filter((l) => l.kind === "trip").length
 
   const [txStatus, setTxStatus] = useState<"idle" | "pending" | "success" | "error">("idle")
   const [txMessage, setTxMessage] = useState<string>("")
@@ -91,7 +100,7 @@ export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
 
       <div className="grid grid-cols-3 gap-2">
         <Card className="p-3 text-center">
-          <p className="text-2xl font-bold">{completedCount}</p>
+          <p className="text-2xl font-bold">{loading ? "—" : completedCount}</p>
           <p className="text-[11px] text-muted-foreground">Deliveries</p>
         </Card>
         <Card className="p-3 text-center">
@@ -108,7 +117,7 @@ export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
         <ProfileLink
           icon="✈️"
           title="My Trips"
-          subtitle={`${listings.filter((l) => l.kind === "trip").length} registered`}
+          subtitle={loading ? "Loading…" : `${tripCount} registered`}
         />
         <ProfileLink
           icon="⚖️"
