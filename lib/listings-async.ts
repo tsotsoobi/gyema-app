@@ -42,8 +42,8 @@ function fromRow(row: ListingRow): Listing {
     postedByUsername: row.posted_by_username,
     whatsapp: row.whatsapp,
     status: row.status,
-    from: row.from_city,
-    to: row.to_city,
+    fromCity: row.from_city,
+    toCity: row.to_city,
     createdAt: row.created_at,
   }
 
@@ -127,8 +127,8 @@ export async function createTripAsync(input: {
   postedById: string
   postedByUsername: string
   whatsapp: string
-  from: string
-  to: string
+  fromCity: string
+  toCity: string
   travelDate: string
   capacity: PackageSize
   pricePi: number
@@ -141,8 +141,8 @@ export async function createTripAsync(input: {
   const row = {
     id,
     kind: "trip" as const,
-    from_city: input.from,
-    to_city: input.to,
+    from_city: input.fromCity,
+    to_city: input.toCity,
     posted_by_id: input.postedById,
     posted_by_username: input.postedByUsername,
     whatsapp: input.whatsapp,
@@ -173,8 +173,8 @@ export async function createPackageAsync(input: {
   postedById: string
   postedByUsername: string
   whatsapp: string
-  from: string
-  to: string
+  fromCity: string
+  toCity: string
   deliverBy: string
   size: PackageSize
   description: string
@@ -187,8 +187,8 @@ export async function createPackageAsync(input: {
   const row = {
     id,
     kind: "package" as const,
-    from_city: input.from,
-    to_city: input.to,
+    from_city: input.fromCity,
+    to_city: input.toCity,
     posted_by_id: input.postedById,
     posted_by_username: input.postedByUsername,
     whatsapp: input.whatsapp,
