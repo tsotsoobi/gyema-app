@@ -178,6 +178,22 @@ export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
         🔴 Disconnect Pi
       </Button>
 
+      <div className="space-y-2 pt-2">
+        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-1">
+          About Gyema
+        </h3>
+        <CollapsibleCard
+          icon="🛡️"
+          title="Trust Protocol"
+          body="Verified by Pi Network: Gyema relies on Pi's KYC verification and Security Circles to surface trusted users."
+        />
+        <CollapsibleCard
+          icon="📄"
+          title="Liability"
+          body="Gyema / Pi Logistics LTD facilitates connections between users but is not responsible for package contents, delivery outcomes, or disputes. Users coordinate and resolve agreements directly."
+        />
+      </div>
+
       <p className="text-[10px] text-center text-muted-foreground pt-4">
         Gyema v1 · Powered by Pi Network
       </p>
@@ -262,5 +278,47 @@ function DismissibleProfileLink({
         ✕
       </button>
     </div>
+  )
+}
+
+function CollapsibleCard({
+  icon,
+  title,
+  body,
+}: {
+  icon: string
+  title: string
+  body: string
+}) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <Card className="overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="w-full p-4 flex items-center gap-3 hover:border-primary cursor-pointer transition-colors text-left"
+      >
+        <div className="text-2xl">{icon}</div>
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-sm">{title}</p>
+        </div>
+        <span
+          className={`text-muted-foreground transition-transform ${
+            open ? "rotate-90" : ""
+          }`}
+        >
+          ›
+        </span>
+      </button>
+      {open && (
+        <div className="px-4 pb-4 -mt-1">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            {body}
+          </p>
+        </div>
+      )}
+    </Card>
   )
 }
