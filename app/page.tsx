@@ -8,7 +8,6 @@ import { HomeTab } from "@/components/home-tab"
 import { TripsTab } from "@/components/trips-tab"
 import { TrackTab } from "@/components/track-tab"
 import { ProfileTab } from "@/components/profile-tab"
-import { WelcomeSheet } from "@/components/welcome-sheet"
 import {
   clearStoredAuth,
   getStoredRole,
@@ -26,7 +25,6 @@ export default function Gyema() {
   const [activeTab, setActiveTab] = useState<Tab>("home")
   const [refreshKey, setRefreshKey] = useState(0)
   const [hydrated, setHydrated] = useState(false)
-  const [showWelcome, setShowWelcome] = useState(false)
 
   // Restore auth state on mount
   useEffect(() => {
@@ -44,23 +42,6 @@ export default function Gyema() {
       console.error("[gyema] expireStaleListingsAsync threw:", err)
     })
   }, [])
-
-  // Show welcome sheet on first-ever app open (any user, including guests).
-  // Persists dismissal in localStorage so it never shows again on this device.
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    const seen = localStorage.getItem("gyema-welcome-seen")
-    if (seen !== "true") {
-      setShowWelcome(true)
-    }
-  }, [])
-
-  const dismissWelcome = () => {
-    setShowWelcome(false)
-    if (typeof window !== "undefined") {
-      localStorage.setItem("gyema-welcome-seen", "true")
-    }
-  }
 
   const handleSignedIn = (signedInUser: PiUser) => {
     setUser(signedInUser)
@@ -102,13 +83,10 @@ export default function Gyema() {
 
   if (!user) {
     return (
-      <>
-        <SignIn
-          onSignedIn={handleSignedIn}
-          onContinueAsGuest={handleContinueAsGuest}
-        />
-        {showWelcome && <WelcomeSheet onDismiss={dismissWelcome} />}
-      </>
+      <SignIn
+        onSignedIn={handleSignedIn}
+        onContinueAsGuest={handleContinueAsGuest}
+      />
     )
   }
 
@@ -142,8 +120,6 @@ export default function Gyema() {
       )}
 
       <BottomNav active={activeTab} onChange={setActiveTab} />
-
-      {showWelcome && <WelcomeSheet onDismiss={dismissWelcome} />}
     </div>
   )
 }
