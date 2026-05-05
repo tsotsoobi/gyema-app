@@ -20,6 +20,7 @@ import {
 } from "@/lib/listings"
 import {
   createPackageAsync,
+  createTripAsync,
   getOpenListingsAsync,
 } from "@/lib/listings-async"
 import type { PiUser, UserRole } from "@/lib/pi-network"
@@ -36,8 +37,9 @@ export function HomeTab({ role, user, refreshKey, onListingCreated }: HomeTabPro
   if (role === "traveller") {
     return (
       <TravellerHome
-        currentUserId={user.uid}
+        user={user}
         refreshKey={refreshKey}
+        onCreated={onListingCreated}
       />
     )
   }
@@ -50,27 +52,105 @@ export function HomeTab({ role, user, refreshKey, onListingCreated }: HomeTabPro
   )
 }
 
-// Traveller view: Available Jobs (packages senders need delivered)
+// Traveller view: Available Jobs feed + collapsible Register a Trip form
 function TravellerHome({
-  currentUserId,
+  user,
   refreshKey,
+  onCreated,
 }: {
-  currentUserId: string
+  user: PiUser
   refreshKey: number
+  onCreated: () => void
 }) {
+  const [showForm, setShowForm] = useState(false)
   const [selected, setSelected] = useState<Listing | null>(null)
   const [listings, setListings] = useState<Listing[]>([])
+  const [fromCity, setFromCity] = useState("")
+  const [toCity, setToCity] = useState("")
+  const [travelDate, setTravelDate] = useState("")
+  const [capacity, setCapacity] = useState<PackageSize | "">("")
+  const [price, setPrice] = useState("")
+  const [notes, setNotes] = useState("")
+  const [whatsapp, setWhatsapp] = useState("")
+  const [submitted, setSubmitted] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     getOpenListingsAsync().then((all) => {
       if (cancelled) return
-      setListings(all.filter((l) => l.kind === "package" && l.postedById !== currentUserId))
+      setListings(all.filter((l) => l.kind === "package" && l.postedById !== user.uid))
     })
     return () => {
       cancelled = true
     }
-  }, [currentUserId, refreshKey])
+  }, [user.uid, refreshKey])
+
+  const valid =
+    fromCity.trim() &&
+    toCity.trim() &&
+    travelDate &&
+    capacity &&
+    price &&
+    whatsapp.trim()
+
+  const handleSubmit = async () => {
+    if (!valid || submitting) return
+    setSubmitting(true)
+    try {
+      const listing = await createTripAsync({
+        fromCity: fromCity.trim(),
+        toCity: toCity.trim(),
+        travelDate,
+        capacity: capacity as PackageSize,
+        pricePi: parseFloat(price),
+        notes: notes.trim(),
+        postedById: user.uid,
+        postedByUsername: user.username,
+        whatsapp: whatsapp.trim(),
+      })
+      if (!listing) {
+        alert("Could not register your trip. Check your connection and try again.")
+        return
+      }
+      setSubmitted(listing.trackingId)
+      setFromCity("")
+      setToCity("")
+      setTravelDate("")
+      setCapacity("")
+      setPrice("")
+      setNotes("")
+      setWhatsapp("")
+      setShowForm(false)
+      onCreated()
+    } catch (e) {
+      console.error("[gyema] Could not register trip:", e)
+      alert("Could not register your trip. Check your connection and try again.")
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (submitted) {
+    return (
+      <div className="px-4 py-4 space-y-3">
+        <Card className="p-6 space-y-3 text-center bg-green-50 border-green-200">
+          <div className="text-4xl">✅</div>
+          <h2 className="text-lg font-semibold text-green-900">Trip registered!</h2>
+          <p className="text-sm text-green-800">
+            Senders heading your way can now see your route.
+          </p>
+          <div className="bg-white rounded-lg p-3 mt-3">
+            <p className="text-xs text-muted-foreground">Your tracking ID</p>
+            <p className="text-lg font-bold font-mono text-primary">{submitted}</p>
+          </div>
+          <Button variant="outline" onClick={() => setSubmitted(null)} className="w-full mt-2">
+            Done
+          </Button>
+        </Card>
+      </div>
+    )
+  }
 
   return (
     <div className="px-4 py-4 space-y-3" data-refresh={refreshKey}>
@@ -123,6 +203,120 @@ function TravellerHome({
           ))}
         </div>
       )}
+
+      <Button
+        variant={showForm ? "outline" : "default"}
+        className="w-full h-12 text-base font-semibold"
+        onClick={() => setShowForm(!showForm)}
+      >
+        {showForm ? "Cancel" : "✈️ Register a Trip"}
+      </Button>
+
+      {showForm && (
+        <Card className="p-4 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="t-from">From City</Label>
+              <Input
+                id="t-from"
+                placeholder="Accra"
+                value={fromCity}
+                onChange={(e) => setFromCity(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="t-to">To City</Label>
+              <Input
+                id="t-to"
+                placeholder="Kumasi"
+                value={toCity}
+                onChange={(e) => setToCity(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="t-date">Travel Date</Label>
+            <Input
+              id="t-date"
+              type="date"
+              value={travelDate}
+              onChange={(e) => setTravelDate(e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="t-capacity">Capacity</Label>
+            <Select value={capacity} onValueChange={(v) => setCapacity(v as PackageSize)}>
+              <SelectTrigger id="t-capacity">
+                <SelectValue placeholder="How much can you carry?" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="envelope">Envelope / documents</SelectItem>
+                <SelectItem value="small">Small (under 2 kg)</SelectItem>
+                <SelectItem value="medium">Medium (2–10 kg)</SelectItem>
+                <SelectItem value="large">Large (10 kg+)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="t-price">Your Price (π Pi)</Label>
+            <Input
+              id="t-price"
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="0.1"
+              placeholder="10"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="t-notes">Notes (optional)</Label>
+            <Textarea
+              id="t-notes"
+              placeholder="e.g. leaving morning, fragile items welcome"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={2}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="t-whatsapp">WhatsApp Number</Label>
+            <Input
+              id="t-whatsapp"
+              type="tel"
+              inputMode="tel"
+              placeholder="+233 24 123 4567"
+              value={whatsapp}
+              onChange={(e) => setWhatsapp(e.target.value)}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Senders will use this to coordinate with you.
+            </p>
+          </div>
+
+          <Button
+            className="w-full h-12 text-base font-semibold"
+            onClick={handleSubmit}
+            disabled={!valid || submitting}
+          >
+            {submitting ? "Registering..." : "Register Trip"}
+          </Button>
+        </Card>
+      )}
+
+      <Card className="p-4 bg-amber-50 border-amber-200">
+        <p className="text-xs text-amber-900 leading-relaxed">
+          ⚠️ Inspect packages before accepting. Never carry sealed items you can't
+          verify, cash, or anything illegal. Gyema is not responsible for the
+          contents of packages.
+        </p>
+      </Card>
 
       {selected && (
         <ListingDetailSheet
