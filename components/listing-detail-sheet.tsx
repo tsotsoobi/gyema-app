@@ -23,6 +23,23 @@ export function ListingDetailSheet({ listing, onClose }: ListingDetailSheetProps
   const date =
     listing.kind === "trip" ? listing.travelDate : listing.deliverBy
 
+  // wa.me requires a number with no +, spaces, or dashes.
+  // We strip non-digits so users can enter the number however they like
+  // (+233 24 123 4567, 0241234567, etc.) and the link still works.
+  const whatsappDigits = listing.whatsapp.replace(/\D/g, "")
+  const whatsappHref = whatsappDigits
+    ? `https://wa.me/${whatsappDigits}?text=${encodeURIComponent(
+        `Hi! I saw your ${listing.kind} on Gyema (${listing.trackingId}). `,
+      )}`
+    : null
+
+  // Pi Chat 1-to-1 deep link requires a numeric Pi userId we don't have
+  // (Pi SDK doesn't expose it; only visible inside an existing chat).
+  // Best we can do is open Pi Chat home; the user then searches the
+  // username manually. Friction acknowledged — this is the v1 stopgap
+  // until Pi exposes username deep links or numeric IDs in the SDK.
+  const piChatHref = "https://chat.pinet.com/home"
+
   return (
     <Sheet open onOpenChange={onClose}>
       <SheetContent side="bottom" className="rounded-t-2xl px-4 pb-6 pt-4">
@@ -87,6 +104,53 @@ export function ListingDetailSheet({ listing, onClose }: ListingDetailSheetProps
             </div>
             <p className="text-[11px] text-muted-foreground text-right max-w-[55%]">
               Paid via Pi Escrow on Acceptance
+            </p>
+          </div>
+
+          <div className="space-y-2 pt-1">
+            <p className="text-xs text-muted-foreground uppercase tracking-wide">
+              Coordinate
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {whatsappHref ? (
+                <a
+                  href={whatsappHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block"
+                >
+                  <Button
+                    variant="outline"
+                    className="w-full h-11 text-sm font-semibold"
+                  >
+                    💬 WhatsApp
+                  </Button>
+                </a>
+              ) : (
+                <Button
+                  variant="outline"
+                  className="w-full h-11 text-sm font-semibold"
+                  disabled
+                >
+                  💬 WhatsApp
+                </Button>
+              )}
+              <a
+                href={piChatHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block"
+              >
+                <Button
+                  variant="outline"
+                  className="w-full h-11 text-sm font-semibold"
+                >
+                  🥧 Chat in Pi
+                </Button>
+              </a>
+            </div>
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              In Pi Chat, search <span className="font-mono">@{listing.postedByUsername}</span> to start a conversation.
             </p>
           </div>
 
