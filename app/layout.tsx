@@ -42,6 +42,13 @@ html {
           strategy="beforeInteractive" guarantees the SDK script runs before
           React hydrates, which is exactly what was missing in PiLApp and why
           its "Sign in with Pi" button did nothing (window.Pi was undefined).
+
+          sandbox: false because we're running on mainnet at the production
+          URL (gyema-app.vercel.app), not inside sandbox.minepi.com. Setting
+          sandbox: true at a non-sandbox URL caused Pi SDK to install
+          iframe-context event handlers that broke text input focus in Pi
+          Browser (May 6 2026 bug — date/select pickers worked but text
+          inputs didn't accept keyboard).
         */}
         <Script
           src="https://sdk.minepi.com/pi-sdk.js"
@@ -51,7 +58,7 @@ html {
           {`
             try {
               if (typeof Pi !== 'undefined') {
-                Pi.init({ version: "2.0", sandbox: true });
+                Pi.init({ version: "2.0", sandbox: false });
               }
             } catch (e) {
               console.warn("Pi SDK init skipped:", e);
