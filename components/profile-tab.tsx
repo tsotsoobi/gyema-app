@@ -60,9 +60,11 @@ export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
     }
   }
 
-  // Only show test payment card to non-guest users inside Pi Browser
+  // Only show test payment card to non-guest users inside Pi Browser, AND only when ?debug=1 is in the URL.
+  // Hidden by default for V1 — payments require V2 backend (escrow + complete flow).
   const isGuest = user.uid.startsWith("guest-")
-  const showTestPayment = !isGuest && isPiSdkAvailable()
+  const isDebugMode = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1"
+  const showTestPayment = !isGuest && isPiSdkAvailable() && isDebugMode
 
   const handleTestPayment = async () => {
     setTxStatus("pending")
