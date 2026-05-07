@@ -97,6 +97,24 @@ export function TrackTab() {
                 : result.notes || "—"}
             </p>
           </div>
+
+          {/* V1.1 — celebratory banner for completed deliveries.
+              Renders only when both parties have confirmed completion
+              (status === "completed" + completedAt is set in the DB).
+              Below the route info but above the posted-by metadata
+              so it reads as the headline outcome of the delivery. */}
+          {result.status === "completed" && (
+            <div className="rounded-md bg-green-50 border border-green-200 p-3 space-y-1">
+              <p className="text-sm font-semibold text-green-900">
+                ✅ Delivery completed!
+              </p>
+              <p className="text-xs text-green-800">
+                Both sender and traveller confirmed this delivery as done.
+                Thanks for moving things across Ghana the smarter way.
+              </p>
+            </div>
+          )}
+
           <div className="flex items-center justify-between border-t pt-3">
             <p className="text-xs text-muted-foreground">Posted by</p>
             <p className="text-sm font-medium">@{result.postedByUsername}</p>
