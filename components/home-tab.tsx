@@ -131,6 +131,11 @@ function TravellerHome({
     }
   }
 
+  // The traveller's WhatsApp number to pass to the detail sheet so they can
+  // accept deliveries. Reuses the value typed into the Register-a-Trip form
+  // if available; otherwise defers (Accept will prompt them to add one).
+  const travellerWhatsapp = whatsapp.trim() || undefined
+
   if (submitted) {
     return (
       <div className="px-4 py-4 space-y-3">
@@ -321,7 +326,22 @@ function TravellerHome({
       {selected && (
         <ListingDetailSheet
           listing={selected}
+          currentUser={{
+            uid: user.uid,
+            username: user.username,
+            whatsapp: travellerWhatsapp,
+          }}
           onClose={() => setSelected(null)}
+          onListingUpdated={(updated) => {
+            // Reflect any state change (Accept, Mark Complete) in the open feed
+            // by removing the listing from the open feed once it's no longer "open".
+            setListings((prev) =>
+              updated.status === "open"
+                ? prev.map((l) => (l.id === updated.id ? updated : l))
+                : prev.filter((l) => l.id !== updated.id),
+            )
+            setSelected(updated)
+          }}
         />
       )}
     </div>
@@ -386,6 +406,10 @@ function SenderHome({
         postedByUsername: user.username,
         whatsapp: whatsapp.trim(),
       })
+      if (!listing) {
+        alert("Could not post your delivery. Check your connection and try again.")
+        return
+      }
       setSubmitted(listing.trackingId)
       setDescription("")
       setSize("")
@@ -403,6 +427,9 @@ function SenderHome({
       setSubmitting(false)
     }
   }
+
+  // Same pattern as TravellerHome — reuse typed WhatsApp if available.
+  const senderWhatsapp = whatsapp.trim() || undefined
 
   if (submitted) {
     return (
@@ -593,7 +620,20 @@ function SenderHome({
       {selected && (
         <ListingDetailSheet
           listing={selected}
+          currentUser={{
+            uid: user.uid,
+            username: user.username,
+            whatsapp: senderWhatsapp,
+          }}
           onClose={() => setSelected(null)}
+          onListingUpdated={(updated) => {
+            setTrips((prev) =>
+              updated.status === "open"
+                ? prev.map((l) => (l.id === updated.id ? updated : l))
+                : prev.filter((l) => l.id !== updated.id),
+            )
+            setSelected(updated)
+          }}
         />
       )}
     </div>
