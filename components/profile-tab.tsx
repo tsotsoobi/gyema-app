@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { type Listing } from "@/lib/listings"
 import { getListingsByUserAsync } from "@/lib/listings-async"
+import { co2SavedForListing } from "@/lib/carbon"
 import {
   type PiUser,
   createTestPayment,
@@ -42,6 +43,13 @@ export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
   const completedCount = listings.filter((l) => l.status === "completed").length
   const tripCount = listings.filter((l) => l.kind === "trip").length
 
+  // V1.1 — aggregate CO2 saved across the user's completed deliveries.
+  // co2SavedForListing already returns the per-user (50/50 split) value,
+  // so we just sum directly. Unknown cities contribute 0 (no fabrication).
+  const co2SavedKgTotal = listings
+    .filter((l) => l.status === "completed")
+    .reduce((sum, l) => sum + co2SavedForListing(l), 0)
+
   const [txStatus, setTxStatus] = useState<"idle" | "pending" | "success" | "error">("idle")
   const [txMessage, setTxMessage] = useState<string>("")
 
@@ -65,6 +73,10 @@ export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
   const isGuest = user.uid.startsWith("guest-")
   const isDebugMode = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1"
   const showTestPayment = !isGuest && isPiSdkAvailable() && isDebugMode
+
+  // Impact tile is hidden for guests — they share a uid namespace,
+  // so aggregated stats wouldn't be personal.
+  const showImpactTile = !isGuest
 
   const handleTestPayment = async () => {
     setTxStatus("pending")
@@ -114,6 +126,30 @@ export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
           <p className="text-[11px] text-muted-foreground">Rating</p>
         </Card>
       </div>
+
+      {showImpactTile && (
+        <Card className="p-4 flex items-center gap-3">
+          <div className="text-2xl">🌱</div>
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-sm">Your Impact</p>
+            <p className="text-xs text-muted-foreground">
+              {loading
+                ? "Loading…"
+                : co2SavedKgTotal > 0
+                  ? `~${co2SavedKgTotal.toFixed(1)} kg CO₂ saved`
+                  : "Complete a delivery to start saving CO₂"}
+            </p>
+          </div>
+          <a
+            href="/methodology.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-primary underline whitespace-nowrap"
+          >
+            How?
+          </a>
+        </Card>
+      )}
 
       <div className="space-y-2">
         <ProfileLink
