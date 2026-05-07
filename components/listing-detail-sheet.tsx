@@ -1,7 +1,9 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Sheet,
   SheetContent,
@@ -14,6 +16,11 @@ import {
   acceptListingAsync,
   confirmCompletionAsync,
 } from "@/lib/listings-async"
+
+// localStorage key used to persist the user's WhatsApp number across sessions.
+// V1.1 keeps this device-local; V2 moves it server-side once we have a profiles
+// table. See the WhatsApp prompt in the Accept flow below.
+const WHATSAPP_STORAGE_KEY = "gyema_whatsapp"
 
 // The viewer's role with respect to this listing.
 // - "sender" or "traveller": viewer is a party to the delivery (poster or matched)
@@ -77,6 +84,38 @@ export function ListingDetailSheet({
   const [confirmPending, setConfirmPending] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
+  // Persisted WhatsApp number, loaded from localStorage on mount.
+  // Falls back to whatever the parent passed in via currentUser.whatsapp
+  // (which itself comes from whatever they've typed in a post-a-trip /
+  // post-a-delivery form during this session). Either source is fine.
+  const [savedWhatsapp, setSavedWhatsapp] = useState<string>("")
+
+  // What the user is typing in the inline prompt right now (only relevant
+  // when no saved number exists yet).
+  const [whatsappInput, setWhatsappInput] = useState<string>("")
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      const stored = window.localStorage.getItem(WHATSAPP_STORAGE_KEY)
+      if (stored && stored.trim()) {
+        setSavedWhatsapp(stored.trim())
+      }
+    } catch {
+      // localStorage can throw in private modes / restricted contexts —
+      // fail silently and the user will just be prompted again next time.
+    }
+  }, [])
+
+  // Effective WhatsApp = whatever we have on hand, in priority order:
+  //   1. value passed in by the parent for this session
+  //   2. value persisted from a previous session
+  // If both are empty, the inline prompt below kicks in.
+  const effectiveWhatsapp =
+    (currentUser.whatsapp && currentUser.whatsapp.trim()) ||
+    savedWhatsapp ||
+    ""
+
   const role = determineViewerRole(listing, currentUser.uid)
   const price = listing.kind === "trip" ? listing.pricePi : listing.offerPi
   const date =
@@ -109,20 +148,49 @@ export function ListingDetailSheet({
   const piChatHref = "https://chat.pinet.com/home"
 
   const handleAccept = async () => {
-    if (!currentUser.whatsapp) {
+    // Prefer (in order): what's typed in the inline prompt right now,
+    // already-loaded effectiveWhatsapp, currentUser.whatsapp.
+    const inlineNumber = whatsappInput.trim()
+    const numberToUse = inlineNumber || effectiveWhatsapp
+
+    if (!numberToUse) {
       setActionError(
-        "Add a WhatsApp number to your profile before accepting deliveries.",
+        "Add your WhatsApp number above to accept this delivery.",
       )
       return
     }
+
+    // Loose validation — at least 9 digits somewhere in the string. Strict
+    // formatting (Ghana +233 prefix etc) is V2 polish.
+    const digitsOnly = numberToUse.replace(/\D/g, "")
+    if (digitsOnly.length < 9) {
+      setActionError(
+        "That number looks too short. Please enter a valid WhatsApp number.",
+      )
+      return
+    }
+
     setAcceptPending(true)
     setActionError(null)
+
+    // If the user typed a fresh number in the inline prompt, persist it now
+    // so they don't get prompted again on the next Accept.
+    if (inlineNumber && inlineNumber !== savedWhatsapp) {
+      try {
+        window.localStorage.setItem(WHATSAPP_STORAGE_KEY, inlineNumber)
+        setSavedWhatsapp(inlineNumber)
+      } catch {
+        // If we can't persist, still proceed with the Accept — the user
+        // will just be re-prompted next time, which is annoying but not broken.
+      }
+    }
+
     try {
       const updated = await acceptListingAsync({
         listingId: listing.id,
         accepterUserId: currentUser.uid,
         accepterUsername: currentUser.username,
-        accepterWhatsapp: currentUser.whatsapp,
+        accepterWhatsapp: numberToUse,
       })
       if (!updated) {
         setActionError(
@@ -187,6 +255,13 @@ export function ListingDetailSheet({
         return { text: listing.status, variant: "secondary" as const }
     }
   })()
+
+  // Show the inline WhatsApp prompt to outsiders viewing an open listing
+  // who don't yet have a number on file.
+  const showWhatsappPrompt =
+    role === "outsider" &&
+    listing.status === "open" &&
+    !effectiveWhatsapp
 
   return (
     <Sheet open onOpenChange={onClose}>
@@ -317,6 +392,25 @@ export function ListingDetailSheet({
           <div className="pt-1 space-y-2">
             {role === "outsider" && listing.status === "open" && (
               <>
+                {showWhatsappPrompt && (
+                  <div className="space-y-1.5 rounded-lg border border-primary/40 bg-primary/5 p-3">
+                    <Label htmlFor="accept-whatsapp" className="text-sm">
+                      Add your WhatsApp number to accept this delivery
+                    </Label>
+                    <Input
+                      id="accept-whatsapp"
+                      type="tel"
+                      inputMode="tel"
+                      placeholder="+233 24 123 4567"
+                      value={whatsappInput}
+                      onChange={(e) => setWhatsappInput(e.target.value)}
+                      className="bg-white"
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Saved on this device — you won't have to enter it again.
+                    </p>
+                  </div>
+                )}
                 <Button
                   className="w-full h-12 text-base font-semibold"
                   onClick={handleAccept}
