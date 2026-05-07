@@ -78,8 +78,16 @@ export default function Gyema() {
   const handleContinueAsGuest = () => {
     // Honest "guest" mode — clearly marked username so it's never confused
     // with a real Pi user. Useful for trying the UI without being in Pi Browser.
+    //
+    // Each guest gets a unique uid so role-detection logic (sender vs traveller,
+    // self vs peer interactions) doesn't false-positive across guest sessions.
+    // The "guest-" prefix is what isGuest checks rely on (see profile-tab.tsx).
+    const guestId =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
     const guest: PiUser = {
-      uid: "guest",
+      uid: `guest-${guestId}`,
       username: "guest",
       accessToken: "",
     }
