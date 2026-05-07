@@ -23,7 +23,7 @@ type ListingRow = {
   size: string | null
   description: string | null
   offer_pi: number | null
-  // v2 (reserved, currently unused)
+  // v2 — Accept / Mark Complete
   matched_with_user_id: string | null
   matched_with_username: string | null
   matched_with_whatsapp: string | null
@@ -45,6 +45,14 @@ function fromRow(row: ListingRow): Listing {
     fromCity: row.from_city,
     toCity: row.to_city,
     createdAt: row.created_at,
+    // v2 fields surface as nullable values from the DB
+    matchedWithUserId: row.matched_with_user_id,
+    matchedWithUsername: row.matched_with_username,
+    matchedWithWhatsapp: row.matched_with_whatsapp,
+    matchedAt: row.matched_at,
+    senderConfirmed: row.sender_confirmed,
+    travellerConfirmed: row.traveller_confirmed,
+    completedAt: row.completed_at,
   }
 
   if (row.kind === "trip") {
@@ -86,10 +94,12 @@ export async function getOpenListingsAsync(): Promise<Listing[]> {
 }
 
 export async function getListingsByUserAsync(userId: string): Promise<Listing[]> {
+  // Return both: listings the user posted, AND listings where the user
+  // accepted (matched_with_user_id). Either makes the listing "theirs".
   const { data, error } = await supabase
     .from("listings")
     .select("*")
-    .eq("posted_by_id", userId)
+    .or(`posted_by_id.eq.${userId},matched_with_user_id.eq.${userId}`)
     .order("created_at", { ascending: false })
 
   if (error) {
@@ -209,6 +219,124 @@ export async function createPackageAsync(input: {
 
   if (error) {
     console.error("createPackageAsync error:", error)
+    return null
+  }
+
+  return fromRow(data as ListingRow)
+}
+
+// ---- Accept / Mark Complete (v2) ----
+
+// Accept a listing: the current user agrees to be the counterparty.
+// Only succeeds if the listing is still 'open' — prevents two users
+// from both "accepting" the same listing in a race.
+//
+// On success, the listing transitions: open → matched.
+// posted_by_id remains the original poster; matched_with_* records
+// the accepter so both parties are now stored on the row.
+export async function acceptListingAsync(input: {
+  listingId: string
+  accepterUserId: string
+  accepterUsername: string
+  accepterWhatsapp: string
+}): Promise<Listing | null> {
+  const { data, error } = await supabase
+    .from("listings")
+    .update({
+      status: "matched",
+      matched_with_user_id: input.accepterUserId,
+      matched_with_username: input.accepterUsername,
+      matched_with_whatsapp: input.accepterWhatsapp,
+      matched_at: new Date().toISOString(),
+    })
+    .eq("id", input.listingId)
+    .eq("status", "open") // race guard: only update if still open
+    .select()
+    .single()
+
+  if (error) {
+    console.error("acceptListingAsync error:", error)
+    return null
+  }
+
+  return data ? fromRow(data as ListingRow) : null
+}
+
+// Confirm completion of a delivery from one party's side.
+//
+// Roles work like this:
+//   - kind = 'package' (Sender posted): poster is the Sender,
+//     the matched user is the Traveller.
+//   - kind = 'trip' (Traveller posted): poster is the Traveller,
+//     the matched user is the Sender.
+//
+// We DON'T re-derive role here from kind — the caller already knows
+// because it's their listing. The caller passes whether THEY are
+// confirming as the sender or the traveller.
+//
+// If the other side has already confirmed, the listing transitions to
+// 'completed' and completed_at is set. Otherwise the listing stays in
+// 'matched' but the relevant *_confirmed flag is now true.
+export async function confirmCompletionAsync(input: {
+  listingId: string
+  role: "sender" | "traveller"
+}): Promise<Listing | null> {
+  // First, read current confirmation state so we know if THIS confirmation
+  // is the one that completes the delivery.
+  const { data: existing, error: readError } = await supabase
+    .from("listings")
+    .select("sender_confirmed, traveller_confirmed, status")
+    .eq("id", input.listingId)
+    .single()
+
+  if (readError || !existing) {
+    console.error("confirmCompletionAsync read error:", readError)
+    return null
+  }
+
+  // Listings that haven't been matched yet can't be confirmed.
+  if (existing.status === "open" || existing.status === "expired") {
+    console.warn("confirmCompletionAsync: listing not in matched state")
+    return null
+  }
+  // Already completed — return as-is, no double-completion.
+  if (existing.status === "completed") {
+    const { data, error } = await supabase
+      .from("listings")
+      .select("*")
+      .eq("id", input.listingId)
+      .single()
+    if (error || !data) return null
+    return fromRow(data as ListingRow)
+  }
+
+  const otherAlreadyConfirmed =
+    input.role === "sender"
+      ? existing.traveller_confirmed
+      : existing.sender_confirmed
+
+  // Build the update: flip THIS side's flag. If the other side was already
+  // true, also transition the listing to 'completed' and stamp completed_at.
+  const update: Record<string, unknown> = {}
+  if (input.role === "sender") {
+    update.sender_confirmed = true
+  } else {
+    update.traveller_confirmed = true
+  }
+  if (otherAlreadyConfirmed) {
+    update.status = "completed"
+    update.completed_at = new Date().toISOString()
+  }
+
+  const { data, error } = await supabase
+    .from("listings")
+    .update(update)
+    .eq("id", input.listingId)
+    .select()
+    .single()
+
+  if (error || !data) {
+    console.error("confirmCompletionAsync update error:", error)
     return null
   }
 
