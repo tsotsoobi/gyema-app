@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gyema — Carbon Methodology</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 24px 20px 80px;
+      color: #1a1a1a;
+      line-height: 1.6;
+      background: #fff;
+    }
+    h1 { font-size: 1.8em; margin-top: 0; }
+    h2 { font-size: 1.25em; margin-top: 2em; border-bottom: 1px solid #e5e5e5; padding-bottom: 0.3em; }
+    h3 { font-size: 1.05em; margin-top: 1.5em; }
+    p, li { font-size: 1em; }
+    ul { padding-left: 1.4em; }
+    a { color: #7B2CBF; }
+    .meta { color: #666; font-size: 0.9em; margin-bottom: 2em; }
+    hr { border: none; border-top: 1px solid #e5e5e5; margin: 2em 0; }
+    code { background: #f4f4f4; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+    .callout {
+      background: #f8f5ff;
+      border-left: 3px solid #7B2CBF;
+      padding: 12px 16px;
+      margin: 1.5em 0;
+      border-radius: 4px;
+    }
+    .callout p { margin: 0; }
+  </style>
+</head>
+<body>
+
+<h1>How we calculate your CO₂ impact</h1>
+<p class="meta"><strong>Last updated:</strong> 7 May 2026</p>
+
+<p>When you complete a delivery on Gyema, we show you an estimate of the carbon you helped avoid. This page explains exactly how that number is calculated, what assumptions go into it, and where we think it falls short.</p>
+
+<p>We have tried to make the methodology simple, transparent, and honest. The number is an <strong>estimate</strong> — not a measurement — and we say so up front.</p>
+
+<hr>
+
+<h2>1. The headline number</h2>
+<p>For every completed delivery, Gyema shows the carbon saved per user (kg of CO₂). This is the carbon a dedicated motorbike or car run between the same two cities would have emitted, attributed equally to the Sender and the Traveller.</p>
+
+<div class="callout">
+  <p><strong>The formula in one line:</strong><br>
+  <code>kg saved per user = (straight-line distance × 1.3) × 0.130 ÷ 2</code></p>
+</div>
+
+<h2>2. Why 130 g of CO₂ per kilometre</h2>
+<p>Gyema operates in Ghana, where last-mile delivery happens on a mix of motorbikes and cars. Rather than pick one, we average the two:</p>
+<ul>
+  <li><strong>Motorbike:</strong> ~80 g CO₂ per km</li>
+  <li><strong>Car:</strong> ~180 g CO₂ per km</li>
+  <li><strong>Mixed baseline:</strong> (80 + 180) ÷ 2 = <strong>130 g CO₂ per km</strong></li>
+</ul>
+<p>This is a deliberately conservative figure. Real Ghana delivery emissions vary widely with vehicle age, fuel quality, traffic, and load. We picked a midpoint that wouldn't overclaim on either end.</p>
+
+<h2>3. Why we multiply distance by 1.3</h2>
+<p>Gyema doesn't have access to real road routing data in V1. So we calculate the straight-line distance between two cities (using the great-circle "haversine" formula on their latitude and longitude), then multiply by 1.3 to approximate the actual road distance.</p>
+<p>The 1.3 factor is a standard cartography heuristic — roads are rarely straight, and 30% is a reasonable average detour across most of Ghana's road network. Some routes will be longer than this, some shorter.</p>
+
+<h2>4. Why only completed deliveries count</h2>
+<p>An open or matched listing hasn't actually saved anything yet — the package still needs to physically arrive. We only credit CO₂ savings once <strong>both</strong> parties have marked the delivery as complete in the app.</p>
+<p>This is intentionally strict. We'd rather underclaim and have the number mean something than count intentions as outcomes.</p>
+
+<h2>5. Why the saving is split 50/50</h2>
+<p>A Gyema delivery only happens because two people agreed to it: one was already making the trip, and the other had a package that needed to move. Neither could have avoided the dedicated run alone.</p>
+<p>So when we calculate the total CO₂ that <em>would</em> have been emitted by a dedicated motorbike or car, we split that saving equally between the Sender and the Traveller. Both shoulders carry the same weight.</p>
+
+<h2>6. Honest caveats</h2>
+<p>We want to be straightforward about what this number is and isn't:</p>
+<ul>
+  <li><strong>It's an estimate, not a measurement.</strong> We don't know what vehicle a dedicated run would have used, how much fuel it would have burned, or what route it would have taken.</li>
+  <li><strong>Cities not in our lookup table contribute zero.</strong> If a delivery is between two places we don't have coordinates for, we don't fabricate a number — we show 0 and move on.</li>
+  <li><strong>The 1.3 road correction is an average.</strong> Some routes (e.g. Accra to Kumasi via the main highway) are closer to straight; some (e.g. routes through hilly terrain) are much longer. Real route data will replace this in V2.</li>
+  <li><strong>We don't account for the Traveller's own emissions.</strong> The Traveller was already making the trip — that's the whole premise — but the package adds a small amount of weight and therefore a tiny amount of additional fuel use. V1 ignores this. The effect is small (a few grams per kg of package) but not zero.</li>
+  <li><strong>We don't account for embodied emissions.</strong> Manufacturing the vehicle, building the road, refining the fuel — none of that is in our number. We only count tailpipe CO₂ from the avoided dedicated trip.</li>
+</ul>
+
+<h2>7. What's coming in V2</h2>
+<p>The V1 methodology is intentionally simple. In V2 we plan to:</p>
+<ul>
+  <li>Replace the city lookup table with real geocoding so any Ghana location works.</li>
+  <li>Replace the 1.3 multiplier with actual road distances from a routing API.</li>
+  <li>Add a small package-weight adjustment to the Traveller's share.</li>
+  <li>Show a global "community impact" total alongside personal impact.</li>
+</ul>
+<p>When we make any of these changes, this page will be updated and the "Last updated" date at the top will change.</p>
+
+<h2>8. Questions or corrections</h2>
+<p>If you spot an error in this methodology, want to suggest an improvement, or just want to talk about the assumptions, please email us at <strong><a href="mailto:pillghana@gmail.com">pillghana@gmail.com</a></strong>. We take this stuff seriously and we'd rather be corrected than be wrong.</p>
+
+</body>
+</html>
