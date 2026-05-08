@@ -343,6 +343,39 @@ export async function confirmCompletionAsync(input: {
   return fromRow(data as ListingRow)
 }
 
+// Cancel a matched listing: either party (poster or matched user) can call this
+// when a deal falls through, the counterparty ghosts, or the date passes
+// without completion. Listing transitions: matched/in_transit → expired.
+//
+// V1.x: caller is responsible for verifying the user is actually one of the
+// two parties before showing the cancel UI. Server-side enforcement (RLS)
+// arrives in V2 along with proper Pi-auth-to-Supabase JWT bridging.
+//
+// Once expired, the listing cannot be revived — it falls into the user's
+// Past Trips/Deliveries section. This is a destructive action; UI must
+// confirm before calling.
+export async function cancelMatchedListingAsync(input: {
+  listingId: string
+}): Promise<Listing | null> {
+  const { data, error } = await supabase
+    .from("listings")
+    .update({ status: "expired" })
+    .eq("id", input.listingId)
+    // Race guard: only cancel if still in matched/in_transit. Prevents
+    // accidentally overwriting a listing that just transitioned to
+    // 'completed' between sheet render and button tap.
+    .in("status", ["matched", "in_transit"])
+    .select()
+    .single()
+
+  if (error) {
+    console.error("cancelMatchedListingAsync error:", error)
+    return null
+  }
+
+  return data ? fromRow(data as ListingRow) : null
+}
+
 // ---- Maintenance ----
 
 // Sweep stale 'open' listings → 'expired'.
