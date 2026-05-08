@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import type { Listing } from "@/lib/listings"
 import {
   acceptListingAsync,
+  cancelMatchedListingAsync,
   confirmCompletionAsync,
 } from "@/lib/listings-async"
 
@@ -82,6 +83,7 @@ export function ListingDetailSheet({
 
   const [acceptPending, setAcceptPending] = useState(false)
   const [confirmPending, setConfirmPending] = useState(false)
+  const [cancelPending, setCancelPending] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
   // Persisted WhatsApp number, loaded from localStorage on mount.
@@ -230,6 +232,43 @@ export function ListingDetailSheet({
       setActionError("Could not confirm completion. Please try again.")
     } finally {
       setConfirmPending(false)
+    }
+  }
+
+  // Cancel a matched listing. Either party can call this. Destructive —
+  // listing transitions to 'expired' and falls into Past Trips/Deliveries.
+  // Confirmation prompt before calling so it's never a one-tap mistake.
+  const handleCancelMatch = async () => {
+    if (role !== "sender" && role !== "traveller") return
+    const confirmed = window.confirm(
+      "Cancel this match?\n\n" +
+        "The listing will be marked as expired and moved to Past " +
+        (role === "traveller" ? "Trips" : "Deliveries") +
+        ". This cannot be undone.\n\n" +
+        "Use this if the deal fell through or the date passed without completing.",
+    )
+    if (!confirmed) return
+
+    setCancelPending(true)
+    setActionError(null)
+    try {
+      const updated = await cancelMatchedListingAsync({
+        listingId: listing.id,
+      })
+      if (!updated) {
+        setActionError(
+          "Could not cancel this listing. It may have already been completed or expired.",
+        )
+        setCancelPending(false)
+        return
+      }
+      setListing(updated)
+      onListingUpdated?.(updated)
+    } catch (err) {
+      console.error("[gyema] handleCancelMatch error:", err)
+      setActionError("Could not cancel this listing. Please try again.")
+    } finally {
+      setCancelPending(false)
     }
   }
 
@@ -461,6 +500,18 @@ export function ListingDetailSheet({
                     Both parties must confirm before the delivery is marked
                     completed.
                   </p>
+
+                  {/* V1.1.5 — Cancel match. Either party can pull the plug if
+                      the deal fell through or the date passed without
+                      completion. Destructive: confirms first, then expires. */}
+                  <Button
+                    variant="outline"
+                    className="w-full h-10 text-sm text-destructive hover:bg-destructive/5 hover:text-destructive border-destructive/40"
+                    onClick={handleCancelMatch}
+                    disabled={cancelPending || confirmPending}
+                  >
+                    {cancelPending ? "Cancelling..." : "Cancel match"}
+                  </Button>
                 </>
               )}
 
