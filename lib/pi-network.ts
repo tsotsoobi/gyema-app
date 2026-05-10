@@ -13,6 +13,10 @@ export type PiUser = {
   uid: string
   username: string
   accessToken: string
+  // v2: Supabase JWT issued by /api/auth/verify after Pi auth succeeds.
+  // Optional because legacy code paths still produce PiUser without it,
+  // and we want gradual migration rather than a big-bang refactor.
+  sessionToken?: string
 }
 
 export type UserRole = "traveller" | "sender"
@@ -60,6 +64,9 @@ export const isPiSdkAvailable = (): boolean => {
 /**
  * Authenticate the current Pioneer with Pi Network.
  * Throws an explicit error if the SDK is not available — no silent mock fallback.
+ *
+ * NOTE: This is the lower-level Pi-only auth. For full sign-in (Pi auth +
+ * Gyema session token), use signInWithPi() below.
  */
 export const authenticateWithPi = async (): Promise<PiUser> => {
   if (!isPiSdkAvailable()) {
@@ -91,13 +98,87 @@ export const authenticateWithPi = async (): Promise<PiUser> => {
 }
 
 /**
- * Create a tiny test payment (0.001 testnet π) to satisfy Pi Develop's
- * "Process a Transaction" checklist item.
+ * Full sign-in flow: Pi auth + server-side verification + session token.
  *
- * The payment lifecycle requires server-side approval and completion via
- * /api/payments/approve and /api/payments/complete. Without these, Pi
- * times out the payment with "developer failed to approve" error.
+ * 1. Authenticates the Pioneer with Pi SDK (Pi Browser handles KYC enforcement).
+ * 2. Sends the Pi access token to /api/auth/verify.
+ * 3. Server calls Pi Platform /v2/me to verify the token, then issues a
+ *    Supabase JWT.
+ * 4. Returns a PiUser with sessionToken populated.
+ *
+ * Throws on any failure — caller decides whether to retry or surface
+ * specific guidance to the Pioneer.
  */
+export const signInWithPi = async (): Promise<PiUser> => {
+  // Step 1: Pi auth (this throws if SDK unavailable or user cancels).
+  const piUser = await authenticateWithPi()
+
+  // Step 2: Server-side verification.
+  let response: Response
+  try {
+    response = await fetch("/api/auth/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accessToken: piUser.accessToken }),
+    })
+  } catch (error) {
+    console.error("[gyema] /api/auth/verify network error:", error)
+    throw new Error(
+      "Could not reach Gyema servers. Check your connection and try again."
+    )
+  }
+
+  // Step 3: Parse the response.
+  let body: {
+    ok: boolean
+    sessionToken?: string
+    reason?: string
+    message?: string
+  }
+  try {
+    body = await response.json()
+  } catch {
+    console.error("[gyema] /api/auth/verify returned non-JSON response")
+    throw new Error("Server returned an unexpected response. Please try again.")
+  }
+
+  // Step 4: Handle gate failure.
+  if (!body.ok || !body.sessionToken) {
+    console.warn("[gyema] Auth gate rejected:", body.reason, body.message)
+    throw new Error(
+      body.message || "Sign-in could not be completed. Please try again."
+    )
+  }
+
+  // Step 5: Success — return the Pioneer with their session token.
+  return {
+    ...piUser,
+    sessionToken: body.sessionToken,
+  }
+}
+
+// In-memory session token storage.
+//
+// Deliberately NOT in localStorage — leaked tokens could be read by any
+// XSS or third-party script. In-memory means the token is gone when the
+// tab closes, requiring fresh sign-in. This is a security improvement
+// over v1's localStorage-backed user object that included accessToken.
+let inMemorySessionToken: string | null = null
+
+export const setSessionToken = (token: string | null) => {
+  inMemorySessionToken = token
+}
+
+export const getSessionToken = (): string | null => {
+  return inMemorySessionToken
+}
+
+// Create a tiny test payment (0.001 testnet π) to satisfy Pi Develop's
+// "Process a Transaction" checklist item.
+//
+// The payment lifecycle requires server-side approval and completion via
+// /api/payments/approve and /api/payments/complete. Without these, Pi
+// times out the payment with "developer failed to approve" error.
 export const createTestPayment = async (): Promise<string> => {
   if (!isPiSdkAvailable()) {
     throw new Error(
@@ -189,7 +270,16 @@ export const getStoredUser = (): PiUser | null => {
   if (typeof window === "undefined") return null
   try {
     const raw = localStorage.getItem(USER_KEY)
-    return raw ? (JSON.parse(raw) as PiUser) : null
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as PiUser
+    // SECURITY: never read sessionToken from localStorage.
+    // If a previous version of the app stored it, drop it on read.
+    return {
+      uid: parsed.uid,
+      username: parsed.username,
+      accessToken: parsed.accessToken,
+      // sessionToken intentionally omitted — comes only from in-memory.
+    }
   } catch {
     return null
   }
@@ -198,7 +288,15 @@ export const getStoredUser = (): PiUser | null => {
 export const setStoredUser = (user: PiUser | null) => {
   if (typeof window === "undefined") return
   if (user) {
-    localStorage.setItem(USER_KEY, JSON.stringify(user))
+    // SECURITY: strip sessionToken before persisting.
+    // Only uid, username, accessToken go to localStorage. The session
+    // token stays in-memory only.
+    const persistable = {
+      uid: user.uid,
+      username: user.username,
+      accessToken: user.accessToken,
+    }
+    localStorage.setItem(USER_KEY, JSON.stringify(persistable))
   } else {
     localStorage.removeItem(USER_KEY)
   }
@@ -209,4 +307,6 @@ export const clearStoredAuth = () => {
     localStorage.removeItem(ROLE_KEY)
     localStorage.removeItem(USER_KEY)
   }
+  // Also clear in-memory session token.
+  setSessionToken(null)
 }
