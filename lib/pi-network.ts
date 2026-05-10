@@ -13,6 +13,12 @@ export type PiUser = {
   uid: string
   username: string
   accessToken: string
+  // v2: Supabase session tokens issued by /api/auth/verify after Pi auth
+  // succeeds. Optional because legacy code paths still produce PiUser
+  // without them.
+  supabaseAccessToken?: string
+  supabaseRefreshToken?: string
+  supabaseUserId?: string
 }
 
 export type UserRole = "traveller" | "sender"
@@ -60,6 +66,9 @@ export const isPiSdkAvailable = (): boolean => {
 /**
  * Authenticate the current Pioneer with Pi Network.
  * Throws an explicit error if the SDK is not available — no silent mock fallback.
+ *
+ * NOTE: This is the lower-level Pi-only auth. For full sign-in (Pi auth +
+ * Supabase session), use signInWithPi() below.
  */
 export const authenticateWithPi = async (): Promise<PiUser> => {
   if (!isPiSdkAvailable()) {
@@ -91,13 +100,102 @@ export const authenticateWithPi = async (): Promise<PiUser> => {
 }
 
 /**
- * Create a tiny test payment (0.001 testnet π) to satisfy Pi Develop's
- * "Process a Transaction" checklist item.
+ * Full sign-in flow: Pi auth + server-side verification + Supabase session.
  *
- * The payment lifecycle requires server-side approval and completion via
- * /api/payments/approve and /api/payments/complete. Without these, Pi
- * times out the payment with "developer failed to approve" error.
+ * 1. Authenticates the Pioneer with Pi SDK (Pi Browser handles KYC enforcement).
+ * 2. Sends the Pi access token to /api/auth/verify.
+ * 3. Server calls Pi Platform /v2/me to verify the token, then provisions
+ *    a Supabase Auth user and generates a real Supabase session.
+ * 4. Returns a PiUser with Supabase session tokens populated.
+ *
+ * Throws on any failure — caller decides whether to retry or surface
+ * specific guidance to the Pioneer.
  */
+export const signInWithPi = async (): Promise<PiUser> => {
+  // Step 1: Pi auth (this throws if SDK unavailable or user cancels).
+  const piUser = await authenticateWithPi()
+
+  // Step 2: Server-side verification + Supabase session generation.
+  let response: Response
+  try {
+    response = await fetch("/api/auth/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accessToken: piUser.accessToken }),
+    })
+  } catch (error) {
+    console.error("[gyema] /api/auth/verify network error:", error)
+    throw new Error(
+      "Could not reach Gyema servers. Check your connection and try again."
+    )
+  }
+
+  // Step 3: Parse the response.
+  let body: {
+    ok: boolean
+    pioneer?: {
+      pi_uid: string
+      pi_username: string
+      supabase_user_id: string
+    }
+    session?: {
+      access_token: string
+      refresh_token: string
+    }
+    reason?: string
+    message?: string
+  }
+  try {
+    body = await response.json()
+  } catch {
+    console.error("[gyema] /api/auth/verify returned non-JSON response")
+    throw new Error("Server returned an unexpected response. Please try again.")
+  }
+
+  // Step 4: Handle gate failure.
+  if (!body.ok || !body.session || !body.pioneer) {
+    console.warn("[gyema] Auth gate rejected:", body.reason, body.message)
+    throw new Error(
+      body.message || "Sign-in could not be completed. Please try again."
+    )
+  }
+
+  // Step 5: Success — return the Pioneer with Supabase session attached.
+  return {
+    ...piUser,
+    supabaseAccessToken: body.session.access_token,
+    supabaseRefreshToken: body.session.refresh_token,
+    supabaseUserId: body.pioneer.supabase_user_id,
+  }
+}
+
+// In-memory Supabase session storage.
+//
+// Deliberately NOT in localStorage — leaked tokens could be read by any
+// XSS or third-party script. In-memory means the tokens are gone when
+// the tab closes, requiring fresh sign-in. This is a security improvement
+// over v1's localStorage-backed user object that included accessToken.
+let inMemorySession: {
+  accessToken: string
+  refreshToken: string
+} | null = null
+
+export const setSupabaseSession = (
+  session: { accessToken: string; refreshToken: string } | null
+) => {
+  inMemorySession = session
+}
+
+export const getSupabaseSession = () => {
+  return inMemorySession
+}
+
+// Create a tiny test payment (0.001 testnet π) to satisfy Pi Develop's
+// "Process a Transaction" checklist item.
+//
+// The payment lifecycle requires server-side approval and completion via
+// /api/payments/approve and /api/payments/complete. Without these, Pi
+// times out the payment with "developer failed to approve" error.
 export const createTestPayment = async (): Promise<string> => {
   if (!isPiSdkAvailable()) {
     throw new Error(
@@ -189,7 +287,17 @@ export const getStoredUser = (): PiUser | null => {
   if (typeof window === "undefined") return null
   try {
     const raw = localStorage.getItem(USER_KEY)
-    return raw ? (JSON.parse(raw) as PiUser) : null
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as PiUser
+    // SECURITY: never read Supabase session tokens from localStorage.
+    // If a previous version of the app stored them, drop them on read.
+    return {
+      uid: parsed.uid,
+      username: parsed.username,
+      accessToken: parsed.accessToken,
+      // supabaseAccessToken/supabaseRefreshToken intentionally omitted
+      // — these come only from in-memory after a fresh sign-in.
+    }
   } catch {
     return null
   }
@@ -198,7 +306,15 @@ export const getStoredUser = (): PiUser | null => {
 export const setStoredUser = (user: PiUser | null) => {
   if (typeof window === "undefined") return
   if (user) {
-    localStorage.setItem(USER_KEY, JSON.stringify(user))
+    // SECURITY: strip Supabase session tokens before persisting.
+    // Only uid, username, accessToken go to localStorage. Session
+    // tokens stay in-memory only.
+    const persistable = {
+      uid: user.uid,
+      username: user.username,
+      accessToken: user.accessToken,
+    }
+    localStorage.setItem(USER_KEY, JSON.stringify(persistable))
   } else {
     localStorage.removeItem(USER_KEY)
   }
@@ -209,4 +325,6 @@ export const clearStoredAuth = () => {
     localStorage.removeItem(ROLE_KEY)
     localStorage.removeItem(USER_KEY)
   }
+  // Also clear in-memory session.
+  setSupabaseSession(null)
 }
