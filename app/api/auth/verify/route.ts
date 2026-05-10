@@ -1,30 +1,29 @@
 // POST /api/auth/verify
 //
-// The Pi-KYC gate. This is the only path by which a Pioneer can
-// obtain a Gyema session JWT. Every other authenticated endpoint
-// expects a JWT issued by this route.
+// The Pi-KYC gate. This is the only path by which a Pioneer obtains
+// a Supabase session. Every authenticated Supabase request from the
+// frontend uses the access_token returned here.
 //
 // Flow:
 //   1. Frontend calls Pi.authenticate() in Pi Browser, gets accessToken
 //   2. Frontend POSTs accessToken to this endpoint
-//   3. Server calls Pi Platform /v2/me with the accessToken
-//   4. If valid: server upserts the Pioneer into Supabase users (if
-//      we had a users table), then issues a Supabase JWT
-//   5. Frontend stores the JWT and uses it for all Supabase requests
+//   3. Server verifies the Pi accessToken with Pi Platform /v2/me
+//   4. Server finds-or-creates a Supabase Auth user mapped to Pi UID
+//   5. Server generates a real Supabase session for that user
+//   6. Frontend stores access_token + refresh_token, uses them for all
+//      Supabase requests (RLS sees auth.uid() = supabase user id)
 //
-// The structured error responses (KYC_NOT_VERIFIED, etc.) let the
-// frontend render specific guidance per failure mode rather than
-// a single generic "sign-in failed" message.
-//
-// IMPORTANT: this route MUST run on the Node.js runtime (not Edge)
-// because the `jsonwebtoken` library uses Node's crypto module,
-// which Edge runtime doesn't expose.
+// IMPORTANT: this route MUST run on the Node.js runtime. The Supabase
+// admin SDK uses Node's crypto module, which Edge runtime doesn't expose.
 
 import { NextRequest, NextResponse } from "next/server"
 import { verifyPiAccessToken } from "@/lib/pi-platform"
-import { issueSupabaseJWT } from "@/lib/jwt"
+import {
+  findOrCreatePioneerUser,
+  generatePioneerSession,
+} from "@/lib/supabase-admin"
 
-// Force Node.js runtime — required for jsonwebtoken's crypto.
+// Force Node.js runtime — required for crypto.
 export const runtime = "nodejs"
 
 // No caching — every verification is a fresh check.
@@ -33,16 +32,20 @@ export const dynamic = "force-dynamic"
 type GateFailureReason =
   | "MISSING_TOKEN"
   | "INVALID_TOKEN"
-  | "PI_PLATFORM_ERROR"
-  | "JWT_ISSUANCE_ERROR"
+  | "PROVISIONING_ERROR"
+  | "SESSION_ERROR"
   | "MALFORMED_REQUEST"
 
 type GateSuccess = {
   ok: true
-  sessionToken: string
   pioneer: {
     pi_uid: string
     pi_username: string
+    supabase_user_id: string
+  }
+  session: {
+    access_token: string
+    refresh_token: string
   }
 }
 
@@ -81,30 +84,45 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // 4. Issue a Supabase JWT for this Pioneer.
-  let sessionToken: string
+  // 4. Find or create the Supabase Auth user mapped to this Pi UID.
+  let supabaseUserId: string
   try {
-    sessionToken = issueSupabaseJWT({
+    const result = await findOrCreatePioneerUser({
       pi_uid: piUser.uid,
       pi_username: piUser.username,
     })
+    supabaseUserId = result.supabase_user_id
   } catch (error) {
-    console.error("[auth/verify] JWT issuance failed:", error)
+    console.error("[auth/verify] User provisioning failed:", error)
     return jsonError(
-      "JWT_ISSUANCE_ERROR",
-      "Server is misconfigured — please try again or contact support",
+      "PROVISIONING_ERROR",
+      "Could not set up your Gyema account — please try again or contact support",
       500
     )
   }
 
-  // 5. Success.
+  // 5. Generate a Supabase session for the Pioneer.
+  let session: { access_token: string; refresh_token: string }
+  try {
+    session = await generatePioneerSession({ pi_uid: piUser.uid })
+  } catch (error) {
+    console.error("[auth/verify] Session generation failed:", error)
+    return jsonError(
+      "SESSION_ERROR",
+      "Could not create your Gyema session — please try again",
+      500
+    )
+  }
+
+  // 6. Success.
   const response: GateSuccess = {
     ok: true,
-    sessionToken,
     pioneer: {
       pi_uid: piUser.uid,
       pi_username: piUser.username,
+      supabase_user_id: supabaseUserId,
     },
+    session,
   }
 
   return NextResponse.json(response, { status: 200 })
