@@ -16,15 +16,17 @@
 // IMPORTANT: this route MUST run on the Node.js runtime. The Supabase
 // admin SDK uses Node's crypto module, which Edge runtime doesn't expose.
 //
-// Logging: every phase logs to console with [auth/verify] prefix.
-// Pi UIDs and Supabase IDs are truncated to first 8 chars in logs to
-// preserve correlation without exposing full KYC-linked identifiers.
+// Observability: every phase logs to (a) console with [auth/verify] prefix
+// for live debugging, and (b) the auth_events table for durable, queryable
+// observability. Pi UIDs and Supabase IDs are truncated to first 8 chars
+// to preserve correlation without exposing full KYC-linked identifiers.
 
 import { NextRequest, NextResponse } from "next/server"
 import { verifyPiAccessToken } from "@/lib/pi-platform"
 import {
   findOrCreatePioneerUser,
   generatePioneerSession,
+  logAuthEvent,
 } from "@/lib/supabase-admin"
 
 // Force Node.js runtime — required for crypto.
@@ -70,24 +72,26 @@ export async function POST(req: NextRequest) {
   console.log("[auth/verify] Request received", {
     ts: new Date().toISOString(),
   })
+  // Fire and forget — don't await, observability must not slow auth
+  logAuthEvent({ event_type: "request_received", elapsed_ms: 0 })
 
   // 1. Parse the request body.
   let body: { accessToken?: unknown }
   try {
     body = await req.json()
   } catch {
-    console.warn("[auth/verify] Rejected: MALFORMED_REQUEST", {
-      ms: Date.now() - startedAt,
-    })
+    const elapsed = Date.now() - startedAt
+    console.warn("[auth/verify] Rejected: MALFORMED_REQUEST", { ms: elapsed })
+    logAuthEvent({ event_type: "rejected_malformed", elapsed_ms: elapsed })
     return jsonError("MALFORMED_REQUEST", "Request body is not valid JSON", 400)
   }
 
   // 2. Validate the access token shape.
   const accessToken = body.accessToken
   if (!accessToken || typeof accessToken !== "string") {
-    console.warn("[auth/verify] Rejected: MISSING_TOKEN", {
-      ms: Date.now() - startedAt,
-    })
+    const elapsed = Date.now() - startedAt
+    console.warn("[auth/verify] Rejected: MISSING_TOKEN", { ms: elapsed })
+    logAuthEvent({ event_type: "rejected_missing_token", elapsed_ms: elapsed })
     return jsonError(
       "MISSING_TOKEN",
       "accessToken is required and must be a string",
@@ -98,19 +102,26 @@ export async function POST(req: NextRequest) {
   // 3. Verify the access token with Pi Platform.
   const piUser = await verifyPiAccessToken(accessToken)
   if (!piUser) {
-    console.warn("[auth/verify] Rejected: INVALID_TOKEN", {
-      ms: Date.now() - startedAt,
-    })
+    const elapsed = Date.now() - startedAt
+    console.warn("[auth/verify] Rejected: INVALID_TOKEN", { ms: elapsed })
+    logAuthEvent({ event_type: "rejected_invalid_token", elapsed_ms: elapsed })
     return jsonError(
       "INVALID_TOKEN",
       "Pi Platform could not verify this access token",
       401
     )
   }
+  const piTokenElapsed = Date.now() - startedAt
   console.log("[auth/verify] Pi token verified", {
     pi_uid: shortId(piUser.uid),
     pi_username: piUser.username,
-    ms: Date.now() - startedAt,
+    ms: piTokenElapsed,
+  })
+  logAuthEvent({
+    event_type: "pi_token_verified",
+    pi_uid_prefix: shortId(piUser.uid),
+    pi_username: piUser.username,
+    elapsed_ms: piTokenElapsed,
   })
 
   // 4. Find or create the Supabase Auth user mapped to this Pi UID.
@@ -124,10 +135,20 @@ export async function POST(req: NextRequest) {
     supabaseUserId = result.supabase_user_id
     userCreated = result.created
   } catch (error) {
+    const elapsed = Date.now() - startedAt
+    const errorMessage =
+      error instanceof Error ? error.message : String(error)
     console.error("[auth/verify] User provisioning failed", {
       pi_uid: shortId(piUser.uid),
-      error: error instanceof Error ? error.message : String(error),
-      ms: Date.now() - startedAt,
+      error: errorMessage,
+      ms: elapsed,
+    })
+    logAuthEvent({
+      event_type: "failed_provisioning",
+      pi_uid_prefix: shortId(piUser.uid),
+      pi_username: piUser.username,
+      error_message: errorMessage,
+      elapsed_ms: elapsed,
     })
     return jsonError(
       "PROVISIONING_ERROR",
@@ -135,11 +156,20 @@ export async function POST(req: NextRequest) {
       500
     )
   }
+  const provisionElapsed = Date.now() - startedAt
   console.log("[auth/verify] User provisioned", {
     pi_uid: shortId(piUser.uid),
     supabase_user_id: shortId(supabaseUserId),
     created: userCreated,
-    ms: Date.now() - startedAt,
+    ms: provisionElapsed,
+  })
+  logAuthEvent({
+    event_type: "user_provisioned",
+    pi_uid_prefix: shortId(piUser.uid),
+    supabase_user_id_prefix: shortId(supabaseUserId),
+    pi_username: piUser.username,
+    user_created: userCreated,
+    elapsed_ms: provisionElapsed,
   })
 
   // 5. Generate a Supabase session for the Pioneer.
@@ -147,11 +177,22 @@ export async function POST(req: NextRequest) {
   try {
     session = await generatePioneerSession({ pi_uid: piUser.uid })
   } catch (error) {
+    const elapsed = Date.now() - startedAt
+    const errorMessage =
+      error instanceof Error ? error.message : String(error)
     console.error("[auth/verify] Session generation failed", {
       pi_uid: shortId(piUser.uid),
       supabase_user_id: shortId(supabaseUserId),
-      error: error instanceof Error ? error.message : String(error),
-      ms: Date.now() - startedAt,
+      error: errorMessage,
+      ms: elapsed,
+    })
+    logAuthEvent({
+      event_type: "failed_session",
+      pi_uid_prefix: shortId(piUser.uid),
+      supabase_user_id_prefix: shortId(supabaseUserId),
+      pi_username: piUser.username,
+      error_message: errorMessage,
+      elapsed_ms: elapsed,
     })
     return jsonError(
       "SESSION_ERROR",
@@ -161,12 +202,21 @@ export async function POST(req: NextRequest) {
   }
 
   // 6. Success.
+  const totalElapsed = Date.now() - startedAt
   console.log("[auth/verify] Sign-in complete", {
     pi_uid: shortId(piUser.uid),
     pi_username: piUser.username,
     supabase_user_id: shortId(supabaseUserId),
     new_user: userCreated,
-    ms: Date.now() - startedAt,
+    ms: totalElapsed,
+  })
+  logAuthEvent({
+    event_type: "sign_in_complete",
+    pi_uid_prefix: shortId(piUser.uid),
+    supabase_user_id_prefix: shortId(supabaseUserId),
+    pi_username: piUser.username,
+    user_created: userCreated,
+    elapsed_ms: totalElapsed,
   })
 
   const response: GateSuccess = {
