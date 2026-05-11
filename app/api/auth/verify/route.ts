@@ -15,6 +15,10 @@
 //
 // IMPORTANT: this route MUST run on the Node.js runtime. The Supabase
 // admin SDK uses Node's crypto module, which Edge runtime doesn't expose.
+//
+// Logging: every phase logs to console with [auth/verify] prefix.
+// Pi UIDs and Supabase IDs are truncated to first 8 chars in logs to
+// preserve correlation without exposing full KYC-linked identifiers.
 
 import { NextRequest, NextResponse } from "next/server"
 import { verifyPiAccessToken } from "@/lib/pi-platform"
@@ -55,18 +59,35 @@ type GateFailure = {
   message: string
 }
 
+// Truncate an ID for safe logging — preserves enough for correlation
+// without exposing the full identifier.
+function shortId(id: string): string {
+  return id.slice(0, 8)
+}
+
 export async function POST(req: NextRequest) {
+  const startedAt = Date.now()
+  console.log("[auth/verify] Request received", {
+    ts: new Date().toISOString(),
+  })
+
   // 1. Parse the request body.
   let body: { accessToken?: unknown }
   try {
     body = await req.json()
   } catch {
+    console.warn("[auth/verify] Rejected: MALFORMED_REQUEST", {
+      ms: Date.now() - startedAt,
+    })
     return jsonError("MALFORMED_REQUEST", "Request body is not valid JSON", 400)
   }
 
   // 2. Validate the access token shape.
   const accessToken = body.accessToken
   if (!accessToken || typeof accessToken !== "string") {
+    console.warn("[auth/verify] Rejected: MISSING_TOKEN", {
+      ms: Date.now() - startedAt,
+    })
     return jsonError(
       "MISSING_TOKEN",
       "accessToken is required and must be a string",
@@ -77,36 +98,61 @@ export async function POST(req: NextRequest) {
   // 3. Verify the access token with Pi Platform.
   const piUser = await verifyPiAccessToken(accessToken)
   if (!piUser) {
+    console.warn("[auth/verify] Rejected: INVALID_TOKEN", {
+      ms: Date.now() - startedAt,
+    })
     return jsonError(
       "INVALID_TOKEN",
       "Pi Platform could not verify this access token",
       401
     )
   }
+  console.log("[auth/verify] Pi token verified", {
+    pi_uid: shortId(piUser.uid),
+    pi_username: piUser.username,
+    ms: Date.now() - startedAt,
+  })
 
   // 4. Find or create the Supabase Auth user mapped to this Pi UID.
   let supabaseUserId: string
+  let userCreated: boolean
   try {
     const result = await findOrCreatePioneerUser({
       pi_uid: piUser.uid,
       pi_username: piUser.username,
     })
     supabaseUserId = result.supabase_user_id
+    userCreated = result.created
   } catch (error) {
-    console.error("[auth/verify] User provisioning failed:", error)
+    console.error("[auth/verify] User provisioning failed", {
+      pi_uid: shortId(piUser.uid),
+      error: error instanceof Error ? error.message : String(error),
+      ms: Date.now() - startedAt,
+    })
     return jsonError(
       "PROVISIONING_ERROR",
       "Could not set up your Gyema account — please try again or contact support",
       500
     )
   }
+  console.log("[auth/verify] User provisioned", {
+    pi_uid: shortId(piUser.uid),
+    supabase_user_id: shortId(supabaseUserId),
+    created: userCreated,
+    ms: Date.now() - startedAt,
+  })
 
   // 5. Generate a Supabase session for the Pioneer.
   let session: { access_token: string; refresh_token: string }
   try {
     session = await generatePioneerSession({ pi_uid: piUser.uid })
   } catch (error) {
-    console.error("[auth/verify] Session generation failed:", error)
+    console.error("[auth/verify] Session generation failed", {
+      pi_uid: shortId(piUser.uid),
+      supabase_user_id: shortId(supabaseUserId),
+      error: error instanceof Error ? error.message : String(error),
+      ms: Date.now() - startedAt,
+    })
     return jsonError(
       "SESSION_ERROR",
       "Could not create your Gyema session — please try again",
@@ -115,6 +161,14 @@ export async function POST(req: NextRequest) {
   }
 
   // 6. Success.
+  console.log("[auth/verify] Sign-in complete", {
+    pi_uid: shortId(piUser.uid),
+    pi_username: piUser.username,
+    supabase_user_id: shortId(supabaseUserId),
+    new_user: userCreated,
+    ms: Date.now() - startedAt,
+  })
+
   const response: GateSuccess = {
     ok: true,
     pioneer: {
