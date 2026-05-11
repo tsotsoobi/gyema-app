@@ -11,6 +11,7 @@
 // - Creating Supabase Auth users mapped to Pi-verified Pioneers
 // - Issuing Supabase session tokens via admin.generateLink
 // - Future v2 escrow operations that legitimately need to bypass RLS
+// - Writing auth observability events (auth_events table)
 //
 // SUPABASE_SERVICE_ROLE_KEY must be set in Vercel's environment
 // variables. NEVER committed to the repo. NEVER exposed to the client.
@@ -173,4 +174,62 @@ function derivePioneerPassword(piUid: string): string {
   // Simple HMAC-style derivation. Not for cryptographic security — the
   // password is for Supabase Auth's internal storage only.
   return `${piUid}.${salt}.gyema-v2`
+}
+
+// ============================================================================
+// Auth observability
+// ============================================================================
+
+/**
+ * Auth event types — must match the CHECK constraint on auth_events.event_type
+ */
+export type AuthEventType =
+  | "request_received"
+  | "pi_token_verified"
+  | "user_provisioned"
+  | "sign_in_complete"
+  | "rejected_malformed"
+  | "rejected_missing_token"
+  | "rejected_invalid_token"
+  | "failed_provisioning"
+  | "failed_session"
+
+/**
+ * Record an auth event for observability.
+ *
+ * Writes to the auth_events table. Failures are deliberately swallowed —
+ * observability must never break the auth flow.
+ *
+ * Pi UIDs and Supabase user IDs should be truncated to first 8 chars
+ * before passing in, matching the convention in console logs.
+ */
+export async function logAuthEvent(event: {
+  event_type: AuthEventType
+  pi_uid_prefix?: string
+  supabase_user_id_prefix?: string
+  pi_username?: string
+  user_created?: boolean
+  error_message?: string
+  elapsed_ms?: number
+  metadata?: Record<string, unknown>
+}): Promise<void> {
+  try {
+    const admin = createAdminClient()
+    const { error } = await admin.from("auth_events").insert({
+      event_type: event.event_type,
+      pi_uid_prefix: event.pi_uid_prefix,
+      supabase_user_id_prefix: event.supabase_user_id_prefix,
+      pi_username: event.pi_username,
+      user_created: event.user_created,
+      error_message: event.error_message,
+      elapsed_ms: event.elapsed_ms,
+      metadata: event.metadata,
+    })
+    if (error) {
+      console.error("[auth-observability] Insert failed:", error.message)
+    }
+  } catch (error) {
+    // Swallow — observability must never break auth
+    console.error("[auth-observability] Unexpected error:", error)
+  }
 }
