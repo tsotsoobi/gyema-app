@@ -75,6 +75,14 @@ export function piUidToSyntheticEmail(piUid: string): string {
  * Returns the Supabase user ID (UUID) — this is what becomes
  * auth.uid() in RLS policies.
  *
+ * Lookup strategy (fastest → slowest):
+ *   1. Pioneers table fast-path: O(1) indexed lookup by pi_uid.
+ *   2. listUsers fallback: O(n) scan, used only if pioneers row is
+ *      missing for an already-provisioned user (shouldn't happen after
+ *      the backfill migration but defends against drift).
+ *   3. createUser: provisions a brand-new Pioneer, then INSERTs into
+ *      pioneers so the next sign-in hits the fast path.
+ *
  * Throws on any failure — the calling route should catch and return
  * a 500 to the client.
  */
@@ -85,9 +93,30 @@ export async function findOrCreatePioneerUser(params: {
   const admin = createAdminClient()
   const email = piUidToSyntheticEmail(params.pi_uid)
 
-  // Check if user already exists by listing all users and filtering.
-  // At v2.0 scale (small user base), this is acceptable. At higher
-  // scale we'd add a pi_uid -> supabase_user_id mapping table.
+  // --- Step 1: Fast path — pioneers table indexed lookup ---
+  const { data: pioneerRow, error: pioneerLookupError } = await admin
+    .from("pioneers")
+    .select("supabase_user_id")
+    .eq("pi_uid", params.pi_uid)
+    .maybeSingle()
+
+  if (pioneerLookupError) {
+    // Don't throw — fall through to the listUsers fallback. A lookup
+    // error here is recoverable (e.g. transient connection blip).
+    console.warn(
+      "[supabase-admin] pioneers lookup failed, falling back to listUsers:",
+      pioneerLookupError.message
+    )
+  }
+
+  if (pioneerRow?.supabase_user_id) {
+    return { supabase_user_id: pioneerRow.supabase_user_id, created: false }
+  }
+
+  // --- Step 2: Fallback — listUsers scan ---
+  // Only runs if the pioneers row is missing. Should be rare after the
+  // backfill migration, but exists as a defense against schema drift
+  // (e.g. a row created via SQL that didn't insert into pioneers).
   const { data: existingList, error: listError } =
     await admin.auth.admin.listUsers({ page: 1, perPage: 1000 })
 
@@ -97,10 +126,23 @@ export async function findOrCreatePioneerUser(params: {
 
   const existing = existingList?.users?.find((u) => u.email === email)
   if (existing) {
+    // Found via fallback — backfill the pioneers row so the next sign-in
+    // hits the fast path. Failure to backfill is non-fatal.
+    const { error: backfillError } = await admin.from("pioneers").insert({
+      pi_uid: params.pi_uid,
+      supabase_user_id: existing.id,
+      pi_username: params.pi_username,
+    })
+    if (backfillError) {
+      console.warn(
+        "[supabase-admin] pioneers backfill insert failed (non-fatal):",
+        backfillError.message
+      )
+    }
     return { supabase_user_id: existing.id, created: false }
   }
 
-  // Create new user.
+  // --- Step 3: Provision new user ---
   const syntheticPassword = derivePioneerPassword(params.pi_uid)
   const { data: newUser, error: createError } =
     await admin.auth.admin.createUser({
@@ -117,6 +159,22 @@ export async function findOrCreatePioneerUser(params: {
   if (createError || !newUser?.user) {
     throw new Error(
       `[supabase-admin] createUser failed: ${createError?.message || "no user returned"}`
+    )
+  }
+
+  // Write to pioneers so the next sign-in is O(1). Failure here is
+  // non-fatal: the user exists in auth.users, and the listUsers fallback
+  // will still find them on the next sign-in (just slower until someone
+  // notices and backfills manually).
+  const { error: insertError } = await admin.from("pioneers").insert({
+    pi_uid: params.pi_uid,
+    supabase_user_id: newUser.user.id,
+    pi_username: params.pi_username,
+  })
+  if (insertError) {
+    console.warn(
+      "[supabase-admin] pioneers insert failed for new user (non-fatal):",
+      insertError.message
     )
   }
 
