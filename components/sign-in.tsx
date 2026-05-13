@@ -4,7 +4,8 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import {
-  authenticateWithPi,
+  signInWithPi,
+  setSupabaseSession,
   isPiSdkAvailable,
   setStoredUser,
   type PiUser,
@@ -23,12 +24,36 @@ export function SignIn({ onSignedIn, onContinueAsGuest }: SignInProps) {
     setError("")
     setLoading(true)
     try {
-      const user = await authenticateWithPi()
+      const user = await signInWithPi()
+
+      // Attach the Supabase session to in-memory storage.
+      // signInWithPi guarantees these are present on success, but we check
+      // defensively in case the contract ever changes.
+      if (user.supabaseAccessToken && user.supabaseRefreshToken) {
+        setSupabaseSession({
+          accessToken: user.supabaseAccessToken,
+          refreshToken: user.supabaseRefreshToken,
+        })
+      } else {
+        // Should never happen if signInWithPi succeeds, but log if it does.
+        console.error(
+          "[sign-in] signInWithPi resolved without Supabase session tokens",
+          { hasAccess: !!user.supabaseAccessToken, hasRefresh: !!user.supabaseRefreshToken }
+        )
+      }
+
       setStoredUser(user)
       onSignedIn(user)
     } catch (err) {
+      // Rich error logging: capture both the user-facing message and the
+      // underlying error for debugging via Vercel browser logs / DevTools.
       const message =
         err instanceof Error ? err.message : "Sign-in failed. Please try again."
+      console.error("[sign-in] handlePiSignIn failed:", {
+        message,
+        error: err,
+        timestamp: new Date().toISOString(),
+      })
       setError(message)
     } finally {
       setLoading(false)
