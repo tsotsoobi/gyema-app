@@ -79,6 +79,27 @@ export async function POST(req: NextRequest) {
   console.log("[auth/verify] Request received", {
     ts: new Date().toISOString(),
   })
+
+  // TEMPORARY DIAGNOSTIC: inspect SUPABASE_SERVICE_ROLE_KEY structure
+  // without leaking its value. Logs character codes and length only.
+  // Remove after diagnosis complete.
+  const _k = process.env.SUPABASE_SERVICE_ROLE_KEY
+  console.log("[auth/verify] env diagnostic", {
+    url_present: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
+    url_length: process.env.NEXT_PUBLIC_SUPABASE_URL?.length || 0,
+    key_present: !!_k,
+    key_length: _k?.length || 0,
+    key_first_10_chars_as_codes: _k
+      ? Array.from(_k.slice(0, 10)).map((c) => c.charCodeAt(0))
+      : [],
+    key_last_3_chars_as_codes: _k
+      ? Array.from(_k.slice(-3)).map((c) => c.charCodeAt(0))
+      : [],
+    key_has_whitespace: _k ? /\s/.test(_k) : false,
+    key_trimmed_length: _k?.trim().length || 0,
+    salt_present: !!process.env.PIONEER_PASSWORD_SALT,
+  })
+
   // Fire and forget via waitUntil — observability must not slow auth,
   // but the promise must survive function teardown on Vercel.
   waitUntil(logAuthEvent({ event_type: "request_received", elapsed_ms: 0 }))
