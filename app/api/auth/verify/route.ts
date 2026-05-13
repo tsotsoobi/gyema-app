@@ -20,8 +20,15 @@
 // for live debugging, and (b) the auth_events table for durable, queryable
 // observability. Pi UIDs and Supabase IDs are truncated to first 8 chars
 // to preserve correlation without exposing full KYC-linked identifiers.
+//
+// Why waitUntil? On Vercel serverless, the function context is torn down
+// the instant the response is returned. An unawaited promise (fire-and-forget)
+// is killed mid-flight before its I/O completes. waitUntil tells the runtime
+// to keep the function alive until the promise settles, without blocking
+// the response.
 
 import { NextRequest, NextResponse } from "next/server"
+import { waitUntil } from "@vercel/functions"
 import { verifyPiAccessToken } from "@/lib/pi-platform"
 import {
   findOrCreatePioneerUser,
@@ -72,8 +79,10 @@ export async function POST(req: NextRequest) {
   console.log("[auth/verify] Request received", {
     ts: new Date().toISOString(),
   })
-  // Fire and forget — don't await, observability must not slow auth
-  logAuthEvent({ event_type: "request_received", elapsed_ms: 0 })
+
+  // Fire and forget via waitUntil — observability must not slow auth,
+  // but the promise must survive function teardown on Vercel.
+  waitUntil(logAuthEvent({ event_type: "request_received", elapsed_ms: 0 }))
 
   // 1. Parse the request body.
   let body: { accessToken?: unknown }
@@ -82,7 +91,7 @@ export async function POST(req: NextRequest) {
   } catch {
     const elapsed = Date.now() - startedAt
     console.warn("[auth/verify] Rejected: MALFORMED_REQUEST", { ms: elapsed })
-    logAuthEvent({ event_type: "rejected_malformed", elapsed_ms: elapsed })
+    waitUntil(logAuthEvent({ event_type: "rejected_malformed", elapsed_ms: elapsed }))
     return jsonError("MALFORMED_REQUEST", "Request body is not valid JSON", 400)
   }
 
@@ -91,7 +100,7 @@ export async function POST(req: NextRequest) {
   if (!accessToken || typeof accessToken !== "string") {
     const elapsed = Date.now() - startedAt
     console.warn("[auth/verify] Rejected: MISSING_TOKEN", { ms: elapsed })
-    logAuthEvent({ event_type: "rejected_missing_token", elapsed_ms: elapsed })
+    waitUntil(logAuthEvent({ event_type: "rejected_missing_token", elapsed_ms: elapsed }))
     return jsonError(
       "MISSING_TOKEN",
       "accessToken is required and must be a string",
@@ -104,7 +113,7 @@ export async function POST(req: NextRequest) {
   if (!piUser) {
     const elapsed = Date.now() - startedAt
     console.warn("[auth/verify] Rejected: INVALID_TOKEN", { ms: elapsed })
-    logAuthEvent({ event_type: "rejected_invalid_token", elapsed_ms: elapsed })
+    waitUntil(logAuthEvent({ event_type: "rejected_invalid_token", elapsed_ms: elapsed }))
     return jsonError(
       "INVALID_TOKEN",
       "Pi Platform could not verify this access token",
@@ -117,12 +126,12 @@ export async function POST(req: NextRequest) {
     pi_username: piUser.username,
     ms: piTokenElapsed,
   })
-  logAuthEvent({
+  waitUntil(logAuthEvent({
     event_type: "pi_token_verified",
     pi_uid_prefix: shortId(piUser.uid),
     pi_username: piUser.username,
     elapsed_ms: piTokenElapsed,
-  })
+  }))
 
   // 4. Find or create the Supabase Auth user mapped to this Pi UID.
   let supabaseUserId: string
@@ -143,13 +152,13 @@ export async function POST(req: NextRequest) {
       error: errorMessage,
       ms: elapsed,
     })
-    logAuthEvent({
+    waitUntil(logAuthEvent({
       event_type: "failed_provisioning",
       pi_uid_prefix: shortId(piUser.uid),
       pi_username: piUser.username,
       error_message: errorMessage,
       elapsed_ms: elapsed,
-    })
+    }))
     return jsonError(
       "PROVISIONING_ERROR",
       "Could not set up your Gyema account — please try again or contact support",
@@ -163,14 +172,14 @@ export async function POST(req: NextRequest) {
     created: userCreated,
     ms: provisionElapsed,
   })
-  logAuthEvent({
+  waitUntil(logAuthEvent({
     event_type: "user_provisioned",
     pi_uid_prefix: shortId(piUser.uid),
     supabase_user_id_prefix: shortId(supabaseUserId),
     pi_username: piUser.username,
     user_created: userCreated,
     elapsed_ms: provisionElapsed,
-  })
+  }))
 
   // 5. Generate a Supabase session for the Pioneer.
   let session: { access_token: string; refresh_token: string }
@@ -186,14 +195,14 @@ export async function POST(req: NextRequest) {
       error: errorMessage,
       ms: elapsed,
     })
-    logAuthEvent({
+    waitUntil(logAuthEvent({
       event_type: "failed_session",
       pi_uid_prefix: shortId(piUser.uid),
       supabase_user_id_prefix: shortId(supabaseUserId),
       pi_username: piUser.username,
       error_message: errorMessage,
       elapsed_ms: elapsed,
-    })
+    }))
     return jsonError(
       "SESSION_ERROR",
       "Could not create your Gyema session — please try again",
@@ -210,14 +219,14 @@ export async function POST(req: NextRequest) {
     new_user: userCreated,
     ms: totalElapsed,
   })
-  logAuthEvent({
+  waitUntil(logAuthEvent({
     event_type: "sign_in_complete",
     pi_uid_prefix: shortId(piUser.uid),
     supabase_user_id_prefix: shortId(supabaseUserId),
     pi_username: piUser.username,
     user_created: userCreated,
     elapsed_ms: totalElapsed,
-  })
+  }))
 
   const response: GateSuccess = {
     ok: true,
