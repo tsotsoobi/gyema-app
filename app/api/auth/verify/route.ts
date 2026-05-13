@@ -80,10 +80,11 @@ export async function POST(req: NextRequest) {
     ts: new Date().toISOString(),
   })
 
-  // TEMPORARY DIAGNOSTIC: inspect SUPABASE_SERVICE_ROLE_KEY structure
-  // without leaking its value. Logs character codes and length only.
+  // TEMPORARY DIAGNOSTIC: inspect env var structure without leaking values.
+  // Logs character codes, lengths, and whitespace flags only.
   // Remove after diagnosis complete.
   const _k = process.env.SUPABASE_SERVICE_ROLE_KEY
+  const _s = process.env.PIONEER_PASSWORD_SALT
   console.log("[auth/verify] env diagnostic", {
     url_present: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
     url_length: process.env.NEXT_PUBLIC_SUPABASE_URL?.length || 0,
@@ -97,7 +98,13 @@ export async function POST(req: NextRequest) {
       : [],
     key_has_whitespace: _k ? /\s/.test(_k) : false,
     key_trimmed_length: _k?.trim().length || 0,
-    salt_present: !!process.env.PIONEER_PASSWORD_SALT,
+    salt_present: !!_s,
+    salt_length: _s?.length || 0,
+    salt_first_3_chars_as_codes: _s
+      ? Array.from(_s.slice(0, 3)).map((c) => c.charCodeAt(0))
+      : [],
+    salt_has_whitespace: _s ? /\s/.test(_s) : false,
+    salt_trimmed_length: _s?.trim().length || 0,
   })
 
   // Fire and forget via waitUntil — observability must not slow auth,
