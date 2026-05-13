@@ -17,6 +17,7 @@
 // variables. NEVER committed to the repo. NEVER exposed to the client.
 
 import { createClient, SupabaseClient } from "@supabase/supabase-js"
+import { createHmac } from "crypto"
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 
@@ -162,18 +163,24 @@ export async function generatePioneerSession(params: {
 /**
  * Derive a synthetic password for a Pioneer from their Pi UID.
  *
- * Uses a server-side secret (PIONEER_PASSWORD_SALT) so the derivation
- * is reproducible across requests but not predictable from the Pi UID
- * alone.
+ * Uses HMAC-SHA256 keyed by PIONEER_PASSWORD_SALT, producing a 64-char
+ * hex string. This is:
+ * - Deterministic (same Pi UID + same salt = same password every time)
+ * - Fixed-length, well under bcrypt's 72-byte limit (Supabase Auth uses
+ *   bcrypt internally; a longer password causes a runtime panic)
+ * - Cryptographically opaque (the Pi UID cannot be recovered from the
+ *   password without the salt)
+ *
+ * Versioning note: the "gyema-v2" suffix on the HMAC input lets us
+ * rotate the derivation scheme in the future by changing the suffix
+ * (e.g. "gyema-v3") and invalidating all existing synthetic passwords.
  */
 function derivePioneerPassword(piUid: string): string {
   const salt = process.env.PIONEER_PASSWORD_SALT
   if (!salt) {
     throw new Error("[supabase-admin] PIONEER_PASSWORD_SALT is not configured")
   }
-  // Simple HMAC-style derivation. Not for cryptographic security — the
-  // password is for Supabase Auth's internal storage only.
-  return `${piUid}.${salt}.gyema-v2`
+  return createHmac("sha256", salt).update(`${piUid}.gyema-v2`).digest("hex")
 }
 
 // ============================================================================
