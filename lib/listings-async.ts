@@ -1,4 +1,4 @@
-import { supabase } from "./supabase"
+import { getAnonClient, getAuthedClient } from "./supabase"
 import type { Listing, PackageSize } from "./listings"
 
 // Database row shape (snake_case, as stored in Supabase)
@@ -78,8 +78,9 @@ function fromRow(row: ListingRow): Listing {
 
 // ---- Read paths ----
 
+// Public read — anyone can browse the open listings feed.
 export async function getOpenListingsAsync(): Promise<Listing[]> {
-  const { data, error } = await supabase
+  const { data, error } = await getAnonClient()
     .from("listings")
     .select("*")
     .eq("status", "open")
@@ -93,10 +94,12 @@ export async function getOpenListingsAsync(): Promise<Listing[]> {
   return (data as ListingRow[]).map(fromRow)
 }
 
+// User-scoped read — returns listings the user posted or was matched into.
+// Requires authentication: tightened RLS will key on auth.jwt() pi_uid.
 export async function getListingsByUserAsync(userId: string): Promise<Listing[]> {
   // Return both: listings the user posted, AND listings where the user
   // accepted (matched_with_user_id). Either makes the listing "theirs".
-  const { data, error } = await supabase
+  const { data, error } = await getAuthedClient()
     .from("listings")
     .select("*")
     .or(`posted_by_id.eq.${userId},matched_with_user_id.eq.${userId}`)
@@ -110,10 +113,13 @@ export async function getListingsByUserAsync(userId: string): Promise<Listing[]>
   return (data as ListingRow[]).map(fromRow)
 }
 
+// Public read — anyone with a tracking ID can look up a listing's status.
+// This is by design: tracking IDs are short and shareable specifically so
+// recipients can check delivery progress without signing in.
 export async function getListingByTrackingIdAsync(
   trackingId: string
 ): Promise<Listing | null> {
-  const { data, error } = await supabase
+  const { data, error } = await getAnonClient()
     .from("listings")
     .select("*")
     .eq("tracking_id", trackingId.trim().toUpperCase())
@@ -129,6 +135,10 @@ export async function getListingByTrackingIdAsync(
 }
 
 // ---- Write paths ----
+//
+// All writes require an authenticated session. The authed client carries
+// the Pioneer's JWT so RLS policies can verify ownership via the
+// posted_by_id / matched_with_user_id columns.
 
 // TODO(v2): switch id/trackingId/createdAt to Postgres-generated defaults
 // (gen_random_uuid() and now()) once we add proper migrations.
@@ -165,7 +175,7 @@ export async function createTripAsync(input: {
     notes: input.notes,
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await getAuthedClient()
     .from("listings")
     .insert(row)
     .select()
@@ -211,7 +221,7 @@ export async function createPackageAsync(input: {
     offer_pi: input.offerPi,
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await getAuthedClient()
     .from("listings")
     .insert(row)
     .select()
@@ -240,7 +250,7 @@ export async function acceptListingAsync(input: {
   accepterUsername: string
   accepterWhatsapp: string
 }): Promise<Listing | null> {
-  const { data, error } = await supabase
+  const { data, error } = await getAuthedClient()
     .from("listings")
     .update({
       status: "matched",
@@ -281,9 +291,11 @@ export async function confirmCompletionAsync(input: {
   listingId: string
   role: "sender" | "traveller"
 }): Promise<Listing | null> {
+  const authed = getAuthedClient()
+
   // First, read current confirmation state so we know if THIS confirmation
   // is the one that completes the delivery.
-  const { data: existing, error: readError } = await supabase
+  const { data: existing, error: readError } = await authed
     .from("listings")
     .select("sender_confirmed, traveller_confirmed, status")
     .eq("id", input.listingId)
@@ -301,7 +313,7 @@ export async function confirmCompletionAsync(input: {
   }
   // Already completed — return as-is, no double-completion.
   if (existing.status === "completed") {
-    const { data, error } = await supabase
+    const { data, error } = await authed
       .from("listings")
       .select("*")
       .eq("id", input.listingId)
@@ -328,7 +340,7 @@ export async function confirmCompletionAsync(input: {
     update.completed_at = new Date().toISOString()
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await authed
     .from("listings")
     .update(update)
     .eq("id", input.listingId)
@@ -347,9 +359,9 @@ export async function confirmCompletionAsync(input: {
 // when a deal falls through, the counterparty ghosts, or the date passes
 // without completion. Listing transitions: matched/in_transit → expired.
 //
-// V1.x: caller is responsible for verifying the user is actually one of the
-// two parties before showing the cancel UI. Server-side enforcement (RLS)
-// arrives in V2 along with proper Pi-auth-to-Supabase JWT bridging.
+// V2: caller responsibility for verifying user is one of the two parties
+// is now supplemented by RLS policies that enforce the same constraint
+// server-side.
 //
 // Once expired, the listing cannot be revived — it falls into the user's
 // Past Trips/Deliveries section. This is a destructive action; UI must
@@ -357,7 +369,7 @@ export async function confirmCompletionAsync(input: {
 export async function cancelMatchedListingAsync(input: {
   listingId: string
 }): Promise<Listing | null> {
-  const { data, error } = await supabase
+  const { data, error } = await getAuthedClient()
     .from("listings")
     .update({ status: "expired" })
     .eq("id", input.listingId)
@@ -377,53 +389,13 @@ export async function cancelMatchedListingAsync(input: {
 }
 
 // ---- Maintenance ----
-
-// Sweep stale 'open' listings → 'expired'.
-// Packages expire when deliver_by is strictly before today (Ghana time).
-// Trips expire when travel_date is strictly before today (Ghana time).
-// Safe to call on every app load — costs one query, idempotent.
-export async function expireStaleListingsAsync(): Promise<number> {
-  // Compute "today" in Africa/Accra (UTC+0, no DST).
-  // Ghana = UTC+0 so toISOString().slice(0, 10) gives the right date,
-  // but we keep the explicit timezone math so this stays correct if we ever
-  // host the app or its users in a different timezone.
-  const nowGhana = new Date(
-    new Date().toLocaleString("en-US", { timeZone: "Africa/Accra" })
-  )
-  const todayIso = nowGhana.toISOString().slice(0, 10) // YYYY-MM-DD
-
-  // Sweep packages: deliver_by < today
-  const { data: pkgData, error: pkgError } = await supabase
-    .from("listings")
-    .update({ status: "expired" })
-    .eq("status", "open")
-    .eq("kind", "package")
-    .lt("deliver_by", todayIso)
-    .select("id")
-
-  if (pkgError) {
-    console.error("expireStaleListingsAsync (packages) error:", pkgError)
-  }
-
-  // Sweep trips: travel_date < today
-  const { data: tripData, error: tripError } = await supabase
-    .from("listings")
-    .update({ status: "expired" })
-    .eq("status", "open")
-    .eq("kind", "trip")
-    .lt("travel_date", todayIso)
-    .select("id")
-
-  if (tripError) {
-    console.error("expireStaleListingsAsync (trips) error:", tripError)
-  }
-
-  const expiredCount =
-    (pkgData?.length ?? 0) + (tripData?.length ?? 0)
-
-  if (expiredCount > 0) {
-    console.log(`[gyema] Expired ${expiredCount} stale listing(s) (today=${todayIso})`)
-  }
-
-  return expiredCount
-}
+//
+// expireStaleListingsAsync has been removed from this file. Stale listing
+// sweeps are now handled server-side by a Vercel Cron Job at:
+//   app/api/cron/expire-stale-listings/route.ts
+// running on the schedule defined in vercel.json.
+//
+// Rationale: the sweep is a system maintenance operation that needs to
+// run even when no Pioneer has the app open, and it needs to bypass RLS
+// (it operates on every Pioneer's listings, not just the caller's).
+// Both of these make a server-side cron the right home for it.
