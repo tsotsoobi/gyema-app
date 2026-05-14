@@ -23,7 +23,7 @@ import {
   createTripAsync,
   getOpenListingsAsync,
 } from "@/lib/listings-async"
-import type { PiUser, UserRole } from "@/lib/pi-network"
+import { isGuest, signInAndPersist, type PiUser, type UserRole } from "@/lib/pi-network"
 import { ListingDetailSheet } from "./listing-detail-sheet"
 
 interface HomeTabProps {
@@ -31,15 +31,17 @@ interface HomeTabProps {
   user: PiUser
   refreshKey: number
   onListingCreated: () => void
+  onSignedIn: (user: PiUser) => void
 }
 
-export function HomeTab({ role, user, refreshKey, onListingCreated }: HomeTabProps) {
+export function HomeTab({ role, user, refreshKey, onListingCreated, onSignedIn }: HomeTabProps) {
   if (role === "traveller") {
     return (
       <TravellerHome
         user={user}
         refreshKey={refreshKey}
         onCreated={onListingCreated}
+        onSignedIn={onSignedIn}
       />
     )
   }
@@ -48,6 +50,7 @@ export function HomeTab({ role, user, refreshKey, onListingCreated }: HomeTabPro
       user={user}
       refreshKey={refreshKey}
       onCreated={onListingCreated}
+      onSignedIn={onSignedIn}
     />
   )
 }
@@ -57,10 +60,12 @@ function TravellerHome({
   user,
   refreshKey,
   onCreated,
+  onSignedIn,
 }: {
   user: PiUser
   refreshKey: number
   onCreated: () => void
+  onSignedIn: (user: PiUser) => void
 }) {
   const [showForm, setShowForm] = useState(false)
   const [selected, setSelected] = useState<Listing | null>(null)
@@ -218,101 +223,105 @@ function TravellerHome({
       </Button>
 
       {showForm && (
-        <Card className="p-4 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+        isGuest(user) ? (
+          <GuestPostGate context="trip" onSignedIn={onSignedIn} />
+        ) : (
+          <Card className="p-4 space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="t-from">From City</Label>
+                <Input
+                  id="t-from"
+                  placeholder="Accra"
+                  value={fromCity}
+                  onChange={(e) => setFromCity(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="t-to">To City</Label>
+                <Input
+                  id="t-to"
+                  placeholder="Kumasi"
+                  value={toCity}
+                  onChange={(e) => setToCity(e.target.value)}
+                />
+              </div>
+            </div>
+
             <div className="space-y-1.5">
-              <Label htmlFor="t-from">From City</Label>
+              <Label htmlFor="t-date">Travel Date</Label>
               <Input
-                id="t-from"
-                placeholder="Accra"
-                value={fromCity}
-                onChange={(e) => setFromCity(e.target.value)}
+                id="t-date"
+                type="date"
+                value={travelDate}
+                onChange={(e) => setTravelDate(e.target.value)}
               />
             </div>
+
             <div className="space-y-1.5">
-              <Label htmlFor="t-to">To City</Label>
+              <Label htmlFor="t-capacity">Capacity</Label>
+              <Select value={capacity} onValueChange={(v) => setCapacity(v as PackageSize)}>
+                <SelectTrigger id="t-capacity">
+                  <SelectValue placeholder="How much can you carry?" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="envelope">Envelope / documents</SelectItem>
+                  <SelectItem value="small">Small (under 2 kg)</SelectItem>
+                  <SelectItem value="medium">Medium (2–10 kg)</SelectItem>
+                  <SelectItem value="large">Large (10 kg+)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="t-price">Your Price (π Pi)</Label>
               <Input
-                id="t-to"
-                placeholder="Kumasi"
-                value={toCity}
-                onChange={(e) => setToCity(e.target.value)}
+                id="t-price"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.1"
+                placeholder="10"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
               />
             </div>
-          </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="t-date">Travel Date</Label>
-            <Input
-              id="t-date"
-              type="date"
-              value={travelDate}
-              onChange={(e) => setTravelDate(e.target.value)}
-            />
-          </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="t-notes">Notes (optional)</Label>
+              <Textarea
+                id="t-notes"
+                placeholder="e.g. leaving morning, fragile items welcome"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={2}
+              />
+            </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="t-capacity">Capacity</Label>
-            <Select value={capacity} onValueChange={(v) => setCapacity(v as PackageSize)}>
-              <SelectTrigger id="t-capacity">
-                <SelectValue placeholder="How much can you carry?" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="envelope">Envelope / documents</SelectItem>
-                <SelectItem value="small">Small (under 2 kg)</SelectItem>
-                <SelectItem value="medium">Medium (2–10 kg)</SelectItem>
-                <SelectItem value="large">Large (10 kg+)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="t-whatsapp">WhatsApp Number</Label>
+              <Input
+                id="t-whatsapp"
+                type="tel"
+                inputMode="tel"
+                placeholder="+233 24 123 4567"
+                value={whatsapp}
+                onChange={(e) => setWhatsapp(e.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Senders will use this to coordinate with you.
+              </p>
+            </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="t-price">Your Price (π Pi)</Label>
-            <Input
-              id="t-price"
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="0.1"
-              placeholder="10"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="t-notes">Notes (optional)</Label>
-            <Textarea
-              id="t-notes"
-              placeholder="e.g. leaving morning, fragile items welcome"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              rows={2}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="t-whatsapp">WhatsApp Number</Label>
-            <Input
-              id="t-whatsapp"
-              type="tel"
-              inputMode="tel"
-              placeholder="+233 24 123 4567"
-              value={whatsapp}
-              onChange={(e) => setWhatsapp(e.target.value)}
-            />
-            <p className="text-[11px] text-muted-foreground">
-              Senders will use this to coordinate with you.
-            </p>
-          </div>
-
-          <Button
-            className="w-full h-12 text-base font-semibold"
-            onClick={handleSubmit}
-            disabled={!valid || submitting}
-          >
-            {submitting ? "Registering..." : "Register Trip"}
-          </Button>
-        </Card>
+            <Button
+              className="w-full h-12 text-base font-semibold"
+              onClick={handleSubmit}
+              disabled={!valid || submitting}
+            >
+              {submitting ? "Registering..." : "Register Trip"}
+            </Button>
+          </Card>
+        )
       )}
 
       <Card className="p-4 bg-amber-50 border-amber-200">
@@ -353,10 +362,12 @@ function SenderHome({
   user,
   refreshKey,
   onCreated,
+  onSignedIn,
 }: {
   user: PiUser
   refreshKey: number
   onCreated: () => void
+  onSignedIn: (user: PiUser) => void
 }) {
   const [showForm, setShowForm] = useState(false)
   const [selected, setSelected] = useState<Listing | null>(null)
@@ -513,101 +524,105 @@ function SenderHome({
       </Button>
 
       {showForm && (
-        <Card className="p-4 space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="desc">Package Description</Label>
-            <Textarea
-              id="desc"
-              placeholder="e.g. sealed box of phone accessories"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={2}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="size">Package Size</Label>
-            <Select value={size} onValueChange={(v) => setSize(v as PackageSize)}>
-              <SelectTrigger id="size">
-                <SelectValue placeholder="Select size" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="envelope">Envelope / documents</SelectItem>
-                <SelectItem value="small">Small (under 2 kg)</SelectItem>
-                <SelectItem value="medium">Medium (2–10 kg)</SelectItem>
-                <SelectItem value="large">Large (10 kg+)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
+        isGuest(user) ? (
+          <GuestPostGate context="package" onSignedIn={onSignedIn} />
+        ) : (
+          <Card className="p-4 space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="from">From City</Label>
-              <Input
-                id="from"
-                placeholder="Accra"
-                value={fromCity}
-                onChange={(e) => setFromCity(e.target.value)}
+              <Label htmlFor="desc">Package Description</Label>
+              <Textarea
+                id="desc"
+                placeholder="e.g. sealed box of phone accessories"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={2}
               />
             </div>
+
             <div className="space-y-1.5">
-              <Label htmlFor="to">To City</Label>
+              <Label htmlFor="size">Package Size</Label>
+              <Select value={size} onValueChange={(v) => setSize(v as PackageSize)}>
+                <SelectTrigger id="size">
+                  <SelectValue placeholder="Select size" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="envelope">Envelope / documents</SelectItem>
+                  <SelectItem value="small">Small (under 2 kg)</SelectItem>
+                  <SelectItem value="medium">Medium (2–10 kg)</SelectItem>
+                  <SelectItem value="large">Large (10 kg+)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="from">From City</Label>
+                <Input
+                  id="from"
+                  placeholder="Accra"
+                  value={fromCity}
+                  onChange={(e) => setFromCity(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="to">To City</Label>
+                <Input
+                  id="to"
+                  placeholder="Tamale"
+                  value={toCity}
+                  onChange={(e) => setToCity(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="deadline">Deadline</Label>
               <Input
-                id="to"
-                placeholder="Tamale"
-                value={toCity}
-                onChange={(e) => setToCity(e.target.value)}
+                id="deadline"
+                type="date"
+                value={deliverBy}
+                onChange={(e) => setDeliverBy(e.target.value)}
               />
             </div>
-          </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="deadline">Deadline</Label>
-            <Input
-              id="deadline"
-              type="date"
-              value={deliverBy}
-              onChange={(e) => setDeliverBy(e.target.value)}
-            />
-          </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="offer">Your Offer (π Pi)</Label>
+              <Input
+                id="offer"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.1"
+                placeholder="5"
+                value={offer}
+                onChange={(e) => setOffer(e.target.value)}
+              />
+            </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="offer">Your Offer (π Pi)</Label>
-            <Input
-              id="offer"
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="0.1"
-              placeholder="5"
-              value={offer}
-              onChange={(e) => setOffer(e.target.value)}
-            />
-          </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="s-whatsapp">WhatsApp Number</Label>
+              <Input
+                id="s-whatsapp"
+                type="tel"
+                inputMode="tel"
+                placeholder="+233 24 123 4567"
+                value={whatsapp}
+                onChange={(e) => setWhatsapp(e.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Travellers will use this to coordinate with you.
+              </p>
+            </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="s-whatsapp">WhatsApp Number</Label>
-            <Input
-              id="s-whatsapp"
-              type="tel"
-              inputMode="tel"
-              placeholder="+233 24 123 4567"
-              value={whatsapp}
-              onChange={(e) => setWhatsapp(e.target.value)}
-            />
-            <p className="text-[11px] text-muted-foreground">
-              Travellers will use this to coordinate with you.
-            </p>
-          </div>
-
-          <Button
-            className="w-full h-12 text-base font-semibold"
-            onClick={handleSubmit}
-            disabled={!valid || submitting}
-          >
-            {submitting ? "Posting..." : "Post Delivery Request"}
-          </Button>
-        </Card>
+            <Button
+              className="w-full h-12 text-base font-semibold"
+              onClick={handleSubmit}
+              disabled={!valid || submitting}
+            >
+              {submitting ? "Posting..." : "Post Delivery Request"}
+            </Button>
+          </Card>
+        )
       )}
 
       <Card className="p-4 bg-amber-50 border-amber-200">
@@ -637,6 +652,71 @@ function SenderHome({
         />
       )}
     </div>
+  )
+}
+
+// Guest-mode gate shown in place of the post form when the current user
+// is browsing as a guest. Posting on Gyema requires a Pi identity — this
+// CTA explains why and offers the upgrade in-place.
+function GuestPostGate({
+  context,
+  onSignedIn,
+}: {
+  context: "trip" | "package"
+  onSignedIn: (user: PiUser) => void
+}) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState("")
+
+  const handleSignIn = async () => {
+    setError("")
+    setLoading(true)
+    try {
+      const user = await signInAndPersist()
+      onSignedIn(user)
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Sign-in failed. Please try again."
+      console.error("[gyema] Guest sign-in upgrade failed:", err)
+      setError(message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const headline =
+    context === "trip"
+      ? "Register your trip on Gyema"
+      : "Post your delivery on Gyema"
+
+  return (
+    <Card className="p-5 space-y-4 border-primary/40 bg-primary/5">
+      <div className="space-y-2">
+        <h3 className="font-semibold text-base">{headline}</h3>
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          Posting on Gyema requires a Pi identity. This keeps every trip and
+          delivery traceable to a real Pioneer.
+        </p>
+      </div>
+
+      {error && (
+        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-xs text-red-900">
+          {error}
+        </div>
+      )}
+
+      <Button
+        className="w-full h-12 text-base font-semibold"
+        onClick={handleSignIn}
+        disabled={loading}
+      >
+        {loading ? "Signing in…" : "Sign in with Pi"}
+      </Button>
+
+      <p className="text-[11px] text-muted-foreground text-center">
+        You can keep browsing as a guest. Sign-in is only required to post.
+      </p>
+    </Card>
   )
 }
 
