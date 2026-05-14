@@ -169,6 +169,49 @@ export const signInWithPi = async (): Promise<PiUser> => {
   }
 }
 
+/**
+ * True if this user is a guest session (Continue-as-Guest path), not an
+ * authenticated Pioneer. Guests can browse and check tracking IDs but
+ * cannot create or modify listings — posting requires a Pi identity so
+ * every listing is traceable to a real Pioneer.
+ */
+export const isGuest = (user: PiUser): boolean => {
+  return user.uid.startsWith("guest-")
+}
+
+/**
+ * Full sign-in + persistence flow used by both the initial Sign-In screen
+ * and any in-app upgrade points (e.g. a guest tapping "Sign in to post").
+ *
+ * Runs Pi auth + Supabase session provisioning, then writes the user to
+ * in-memory and localStorage. Returns the fully-hydrated PiUser. Throws
+ * with a user-presentable message on any failure.
+ *
+ * Callers are responsible for updating their own React state with the
+ * returned user — this helper does not know about component state.
+ */
+export const signInAndPersist = async (): Promise<PiUser> => {
+  const user = await signInWithPi()
+
+  if (user.supabaseAccessToken && user.supabaseRefreshToken) {
+    setSupabaseSession({
+      accessToken: user.supabaseAccessToken,
+      refreshToken: user.supabaseRefreshToken,
+    })
+  } else {
+    console.error(
+      "[pi-network] signInWithPi resolved without Supabase session tokens",
+      {
+        hasAccess: !!user.supabaseAccessToken,
+        hasRefresh: !!user.supabaseRefreshToken,
+      }
+    )
+  }
+
+  setStoredUser(user)
+  return user
+}
+
 // In-memory Supabase session storage.
 //
 // Deliberately NOT in localStorage — leaked tokens could be read by any
