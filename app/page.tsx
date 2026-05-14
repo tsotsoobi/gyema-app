@@ -18,7 +18,6 @@ import {
   type PiUser,
   type UserRole,
 } from "@/lib/pi-network"
-import { expireStaleListingsAsync } from "@/lib/listings-async"
 
 export default function Gyema() {
   const [user, setUser] = useState<PiUser | null>(null)
@@ -37,13 +36,8 @@ export default function Gyema() {
     setHydrated(true)
   }, [])
 
-  // Sweep stale 'open' listings on app load.
-  // Runs once per session, fire-and-forget, errors logged to console.
-  useEffect(() => {
-    expireStaleListingsAsync().catch((err) => {
-      console.error("[gyema] expireStaleListingsAsync threw:", err)
-    })
-  }, [])
+  // Stale listing expiration is handled server-side by the Vercel Cron Job
+  // at /api/cron/expire-stale-listings. No client-side sweep needed.
 
   // Show welcome sheet on first-ever app open (any user, including guests).
   // Persists dismissal in localStorage so it never shows again on this device.
