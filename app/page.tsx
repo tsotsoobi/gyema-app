@@ -133,6 +133,7 @@ export default function Gyema() {
           user={user}
           refreshKey={refreshKey}
           onListingCreated={triggerRefresh}
+          onSignedIn={handleSignedIn}
         />
       )}
       {activeTab === "trips" && (
