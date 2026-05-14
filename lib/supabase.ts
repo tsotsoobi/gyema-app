@@ -1,6 +1,6 @@
 // Supabase client configuration.
 //
-// Two patterns coexist here:
+// Three patterns coexist here:
 //
 // 1. The default `supabase` client uses the anon key. It's the
 //    pre-authentication client used for public reads (browsing
@@ -13,11 +13,18 @@
 //    the authenticated role and have access to auth.jwt() claims
 //    (sub, pi_username, etc.).
 //
+// 3. The `getAnonClient()` / `getAuthedClient()` helpers wrap the
+//    above two patterns under intent-revealing names. Call sites
+//    in lib/listings-async.ts use these instead of importing
+//    `supabase` directly, so the security boundary is documented
+//    at every query site.
+//
 // IMPORTANT: never use the anon-key `supabase` client to write
 // listings, deliveries, or any user-scoped data once strict RLS is
-// in place. Use createAuthedSupabase(jwt) for those operations.
+// in place. Use getAuthedClient() for those operations.
 
-import { createClient } from "@supabase/supabase-js"
+import { createClient, SupabaseClient } from "@supabase/supabase-js"
+import { getSupabaseSession } from "./pi-network"
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -60,4 +67,45 @@ export function createAuthedSupabase(jwt: string) {
       detectSessionInUrl: false,
     },
   })
+}
+
+/**
+ * Returns the always-anonymous Supabase client.
+ *
+ * Use for: public reads (browsing open listings, tracking by ID).
+ * Never use for: writes, user-scoped reads.
+ *
+ * This is just the existing `supabase` export, re-surfaced under a
+ * name that documents intent at the call site. When you read
+ * `getAnonClient()` in a query you immediately know this is a
+ * deliberately public operation.
+ */
+export function getAnonClient(): SupabaseClient {
+  return supabase
+}
+
+/**
+ * Returns a Supabase client carrying the current Pioneer's JWT.
+ *
+ * Throws if there is no in-memory Supabase session — callers must
+ * either ensure the user is signed in, or use getAnonClient() for
+ * public operations.
+ *
+ * Use for: writes, user-scoped reads (My Activity), accept/cancel/
+ * confirm operations.
+ *
+ * The thrown error is intentional: silently falling back to anon
+ * would mean writes hit RLS as anonymous role and silently fail
+ * once policies tighten. Fail-loud here exposes the bug at the
+ * exact call site instead of producing mysterious empty result sets.
+ */
+export function getAuthedClient(): SupabaseClient {
+  const session = getSupabaseSession()
+  if (!session?.accessToken) {
+    throw new Error(
+      "[supabase] getAuthedClient() called without an active session. " +
+        "Caller must verify sign-in state or use getAnonClient() for public operations."
+    )
+  }
+  return createAuthedSupabase(session.accessToken)
 }
