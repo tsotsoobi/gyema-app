@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/expire-stale-listings",
+      "schedule": "0 * * * *"
+    }
+  ]
+}
