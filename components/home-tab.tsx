@@ -341,6 +341,7 @@ function TravellerHome({
             whatsapp: travellerWhatsapp,
           }}
           onClose={() => setSelected(null)}
+          onSignedIn={onSignedIn}
           onListingUpdated={(updated) => {
             // Reflect any state change (Accept, Mark Complete) in the open feed
             // by removing the listing from the open feed once it's no longer "open".
@@ -641,6 +642,7 @@ function SenderHome({
             whatsapp: senderWhatsapp,
           }}
           onClose={() => setSelected(null)}
+          onSignedIn={onSignedIn}
           onListingUpdated={(updated) => {
             setTrips((prev) =>
               updated.status === "open"
@@ -724,8 +726,9 @@ function formatDate(iso: string): string {
   if (!iso) return "—"
   try {
     return new Date(iso).toLocaleDateString(undefined, {
-      month: "short",
+      month: "long",
       day: "numeric",
+      year: "numeric",
     })
   } catch {
     return iso
