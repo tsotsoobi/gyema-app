@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -17,6 +18,7 @@ import {
   cancelMatchedListingAsync,
   confirmCompletionAsync,
 } from "@/lib/listings-async"
+import { signInAndPersist, type PiUser } from "@/lib/pi-network"
 
 // localStorage key used to persist the user's WhatsApp number across sessions.
 // V1.1 keeps this device-local; V2 moves it server-side once we have a profiles
@@ -68,6 +70,7 @@ interface ListingDetailSheetProps {
   }
   onClose: () => void
   onListingUpdated?: (updated: Listing) => void
+  onSignedIn?: (user: PiUser) => void
 }
 
 export function ListingDetailSheet({
@@ -75,6 +78,7 @@ export function ListingDetailSheet({
   currentUser,
   onClose,
   onListingUpdated,
+  onSignedIn,
 }: ListingDetailSheetProps) {
   // Keep the listing in local state so Accept/Mark-Complete actions
   // re-render the sheet with new buttons immediately, without forcing
@@ -148,6 +152,15 @@ export function ListingDetailSheet({
     : null
 
   const piChatHref = "https://chat.pinet.com/home"
+
+  // Guest detection — guests are blocked from all write actions
+  // (Accept, Mark Complete, Cancel match) since these mutations require
+  // a verifiable Pi identity. A guest will see <GuestActionGate> instead.
+  //
+  // Inlined here rather than imported from pi-network because the sheet
+  // receives a structurally-typed currentUser (uid, username, whatsapp?),
+  // not a full PiUser — but the uid check is identical.
+  const viewerIsGuest = currentUser.uid.startsWith("guest-")
 
   const handleAccept = async () => {
     // Prefer (in order): what's typed in the inline prompt right now,
@@ -295,12 +308,14 @@ export function ListingDetailSheet({
     }
   })()
 
-  // Show the inline WhatsApp prompt to outsiders viewing an open listing
-  // who don't yet have a number on file.
+  // Show the inline WhatsApp prompt to outsider Pioneers viewing an open
+  // listing who don't yet have a number on file. Guests are excluded
+  // because their action surface is the gate, not the Accept button.
   const showWhatsappPrompt =
     role === "outsider" &&
     listing.status === "open" &&
-    !effectiveWhatsapp
+    !effectiveWhatsapp &&
+    !viewerIsGuest
 
   return (
     <Sheet open onOpenChange={onClose}>
@@ -429,7 +444,16 @@ export function ListingDetailSheet({
 
           {/* Primary action area — depends on viewer role and listing state */}
           <div className="pt-1 space-y-2">
-            {role === "outsider" && listing.status === "open" && (
+            {/* Guest viewing an open listing: gate the Accept action. */}
+            {viewerIsGuest && role === "outsider" && listing.status === "open" && (
+              <GuestActionGate
+                headline="Accept this delivery on Gyema"
+                onSignedIn={onSignedIn}
+              />
+            )}
+
+            {/* Pioneer outsider viewing an open listing: normal Accept flow. */}
+            {!viewerIsGuest && role === "outsider" && listing.status === "open" && (
               <>
                 {showWhatsappPrompt && (
                   <div className="space-y-1.5 rounded-lg border border-primary/40 bg-primary/5 p-3">
@@ -471,7 +495,22 @@ export function ListingDetailSheet({
               </p>
             )}
 
-            {(role === "sender" || role === "traveller") &&
+            {/* Party-only actions (Mark Complete, Cancel match). Guests
+                shouldn't reach these in practice — they can't be a party
+                to a matched listing — but we gate defensively in case a
+                historical guest listing is being viewed by a guest session. */}
+            {viewerIsGuest &&
+              (role === "sender" || role === "traveller") &&
+              (listing.status === "matched" ||
+                listing.status === "in_transit") && (
+                <GuestActionGate
+                  headline="Manage this delivery on Gyema"
+                  onSignedIn={onSignedIn}
+                />
+              )}
+
+            {!viewerIsGuest &&
+              (role === "sender" || role === "traveller") &&
               (listing.status === "matched" ||
                 listing.status === "in_transit") && (
                 <>
@@ -548,6 +587,74 @@ export function ListingDetailSheet({
         </div>
       </SheetContent>
     </Sheet>
+  )
+}
+
+// Guest-mode gate shown in place of write actions (Accept, Mark Complete,
+// Cancel match) when the current viewer is a guest. Mirrors the post-side
+// GuestPostGate in home-tab.tsx for consistent UX language across surfaces.
+//
+// If onSignedIn isn't wired by the parent (legacy callers), the button
+// is hidden — guests still see the explanatory message and can dismiss
+// the sheet. This keeps the component backward-compatible.
+function GuestActionGate({
+  headline,
+  onSignedIn,
+}: {
+  headline: string
+  onSignedIn?: (user: PiUser) => void
+}) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState("")
+
+  const handleSignIn = async () => {
+    if (!onSignedIn) return
+    setError("")
+    setLoading(true)
+    try {
+      const user = await signInAndPersist()
+      onSignedIn(user)
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Sign-in failed. Please try again."
+      console.error("[gyema] Guest sign-in upgrade failed:", err)
+      setError(message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Card className="p-5 space-y-4 border-primary/40 bg-primary/5">
+      <div className="space-y-2">
+        <h3 className="font-semibold text-base">{headline}</h3>
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          Posting on Gyema requires a Pi identity. This keeps every trip and
+          delivery traceable to a real Pioneer.
+        </p>
+      </div>
+
+      {error && (
+        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-xs text-red-900">
+          {error}
+        </div>
+      )}
+
+      {onSignedIn && (
+        <Button
+          className="w-full h-12 text-base font-semibold"
+          onClick={handleSignIn}
+          disabled={loading}
+        >
+          {loading ? "Signing in…" : "Sign in with Pi"}
+        </Button>
+      )}
+
+      <p className="text-[11px] text-muted-foreground text-center">
+        You can keep browsing as a guest. Sign-in is only required to act on
+        listings.
+      </p>
+    </Card>
   )
 }
 
