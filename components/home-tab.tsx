@@ -23,8 +23,9 @@ import {
   createTripAsync,
   getOpenListingsAsync,
 } from "@/lib/listings-async"
-import { isGuest, signInAndPersist, type PiUser, type UserRole } from "@/lib/pi-network"
+import { isGuest, type PiUser, type UserRole } from "@/lib/pi-network"
 import { ListingDetailSheet } from "./listing-detail-sheet"
+import { GuestPostGate } from "./guest-post-gate"
 
 interface HomeTabProps {
   role: UserRole
@@ -343,8 +344,6 @@ function TravellerHome({
           onClose={() => setSelected(null)}
           onSignedIn={onSignedIn}
           onListingUpdated={(updated) => {
-            // Reflect any state change (Accept, Mark Complete) in the open feed
-            // by removing the listing from the open feed once it's no longer "open".
             setListings((prev) =>
               updated.status === "open"
                 ? prev.map((l) => (l.id === updated.id ? updated : l))
@@ -440,7 +439,6 @@ function SenderHome({
     }
   }
 
-  // Same pattern as TravellerHome — reuse typed WhatsApp if available.
   const senderWhatsapp = whatsapp.trim() || undefined
 
   if (submitted) {
@@ -654,71 +652,6 @@ function SenderHome({
         />
       )}
     </div>
-  )
-}
-
-// Guest-mode gate shown in place of the post form when the current user
-// is browsing as a guest. Posting on Gyema requires a Pi identity — this
-// CTA explains why and offers the upgrade in-place.
-function GuestPostGate({
-  context,
-  onSignedIn,
-}: {
-  context: "trip" | "package"
-  onSignedIn: (user: PiUser) => void
-}) {
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState("")
-
-  const handleSignIn = async () => {
-    setError("")
-    setLoading(true)
-    try {
-      const user = await signInAndPersist()
-      onSignedIn(user)
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Sign-in failed. Please try again."
-      console.error("[gyema] Guest sign-in upgrade failed:", err)
-      setError(message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const headline =
-    context === "trip"
-      ? "Register your trip on Gyema"
-      : "Post your delivery on Gyema"
-
-  return (
-    <Card className="p-5 space-y-4 border-primary/40 bg-primary/5">
-      <div className="space-y-2">
-        <h3 className="font-semibold text-base">{headline}</h3>
-        <p className="text-sm text-muted-foreground leading-relaxed">
-          Posting on Gyema requires a Pi identity. This keeps every trip and
-          delivery traceable to a real Pioneer.
-        </p>
-      </div>
-
-      {error && (
-        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-xs text-red-900">
-          {error}
-        </div>
-      )}
-
-      <Button
-        className="w-full h-12 text-base font-semibold"
-        onClick={handleSignIn}
-        disabled={loading}
-      >
-        {loading ? "Signing in…" : "Sign in with Pi"}
-      </Button>
-
-      <p className="text-[11px] text-muted-foreground text-center">
-        You can keep browsing as a guest. Sign-in is only required to post.
-      </p>
-    </Card>
   )
 }
 
