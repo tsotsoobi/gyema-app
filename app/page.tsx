@@ -142,6 +142,7 @@ export default function Gyema() {
           role={role}
           refreshKey={refreshKey}
           onCreated={triggerRefresh}
+          onSignedIn={handleSignedIn}
         />
       )}
       {activeTab === "track" && <TrackTab />}
