@@ -22,13 +22,15 @@ import {
   createTripAsync,
   getListingsByUserAsync,
 } from "@/lib/listings-async"
-import type { PiUser, UserRole } from "@/lib/pi-network"
+import { isGuest, type PiUser, type UserRole } from "@/lib/pi-network"
+import { GuestPostGate } from "./guest-post-gate"
 
 interface TripsTabProps {
   user: PiUser
   role: UserRole
   refreshKey: number
   onCreated: () => void
+  onSignedIn: (user: PiUser) => void
 }
 
 // Statuses considered "past" — listings the user has finished with.
@@ -36,12 +38,18 @@ interface TripsTabProps {
 // 'completed' is reserved for the v2 confirmation flow.
 const PAST_STATUSES = new Set(["expired", "completed"])
 
-export function TripsTab({ user, role, refreshKey, onCreated }: TripsTabProps) {
+export function TripsTab({ user, role, refreshKey, onCreated, onSignedIn }: TripsTabProps) {
   const [showForm, setShowForm] = useState(false)
   const [myListings, setMyListings] = useState<Listing[]>([])
 
   useEffect(() => {
     let cancelled = false
+    // Guests have no DB-side listings (and their guest- uid isn't queryable
+    // as a real Pi identity); skip the fetch and render an empty My Activity.
+    if (isGuest(user)) {
+      setMyListings([])
+      return
+    }
     getListingsByUserAsync(user.uid).then((all) => {
       if (cancelled) return
       setMyListings(all)
@@ -64,6 +72,8 @@ export function TripsTab({ user, role, refreshKey, onCreated }: TripsTabProps) {
     PAST_STATUSES.has(l.status)
   )
 
+  const viewerIsGuest = isGuest(user)
+
   return (
     <div className="px-4 py-4 space-y-3" data-refresh={refreshKey}>
       <div className="flex items-center justify-between">
@@ -85,13 +95,17 @@ export function TripsTab({ user, role, refreshKey, onCreated }: TripsTabProps) {
       )}
 
       {role === "traveller" && showForm && (
-        <RegisterTripForm
-          user={user}
-          onDone={() => {
-            setShowForm(false)
-            onCreated()
-          }}
-        />
+        viewerIsGuest ? (
+          <GuestPostGate context="trip" onSignedIn={onSignedIn} />
+        ) : (
+          <RegisterTripForm
+            user={user}
+            onDone={() => {
+              setShowForm(false)
+              onCreated()
+            }}
+          />
+        )
       )}
 
       {/* Active section */}
@@ -105,9 +119,11 @@ export function TripsTab({ user, role, refreshKey, onCreated }: TripsTabProps) {
             <div className="text-4xl">📭</div>
             <p className="text-sm font-medium">Nothing here yet</p>
             <p className="text-xs text-muted-foreground">
-              {role === "traveller"
-                ? "Register your first trip to start earning Pi."
-                : "Post a delivery from the Home tab."}
+              {viewerIsGuest
+                ? "Sign in with Pi to start posting trips and deliveries."
+                : role === "traveller"
+                  ? "Register your first trip to start earning Pi."
+                  : "Post a delivery from the Home tab."}
             </p>
           </Card>
         ) : (
