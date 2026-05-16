@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { type Tab } from "@/components/bottom-nav"
 import { type Listing } from "@/lib/listings"
 import { getListingsByUserAsync } from "@/lib/listings-async"
 import { co2SavedForListing } from "@/lib/carbon"
@@ -17,7 +16,7 @@ interface ProfileTabProps {
   user: PiUser
   onSignOut: () => void
   refreshKey: number
-  onNavigate: (tab: Tab) => void
+  onNavigate: (tab: "home" | "trips" | "track" | "profile") => void
 }
 
 export function ProfileTab({ user, onSignOut, refreshKey, onNavigate }: ProfileTabProps) {
@@ -87,7 +86,6 @@ export function ProfileTab({ user, onSignOut, refreshKey, onNavigate }: ProfileT
       const paymentId = await createTestPayment()
       setTxStatus("success")
       setTxMessage(`✅ Test payment sent. ID: ${paymentId.slice(0, 12)}…`)
-      // Successful payment proves KYC — auto-dismiss KYC card.
       if (!kycHidden) {
         dismissKyc()
       }
@@ -142,7 +140,7 @@ export function ProfileTab({ user, onSignOut, refreshKey, onNavigate }: ProfileT
                   : "Complete a delivery to start saving CO₂"}
             </p>
           </div>
-          <a
+          
             href="/methodology.html"
             target="_blank"
             rel="noopener noreferrer"
