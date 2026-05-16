@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { type Tab } from "@/components/bottom-nav"
 import { type Listing } from "@/lib/listings"
 import { getListingsByUserAsync } from "@/lib/listings-async"
 import { co2SavedForListing } from "@/lib/carbon"
@@ -16,9 +17,10 @@ interface ProfileTabProps {
   user: PiUser
   onSignOut: () => void
   refreshKey: number
+  onNavigate: (tab: Tab) => void
 }
 
-export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
+export function ProfileTab({ user, onSignOut, refreshKey, onNavigate }: ProfileTabProps) {
   const [listings, setListings] = useState<Listing[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -156,6 +158,7 @@ export function ProfileTab({ user, onSignOut, refreshKey }: ProfileTabProps) {
           icon="✈️"
           title="My Trips"
           subtitle={loading ? "Loading…" : `${tripCount} registered`}
+          onClick={() => onNavigate("trips")}
         />
         <ProfileLink
           icon="⚖️"
@@ -245,12 +248,14 @@ function ProfileLink({
   subtitle,
   disabled,
   href,
+  onClick,
 }: {
   icon: string
   title: string
   subtitle: string
   disabled?: boolean
   href?: string
+  onClick?: () => void
 }) {
   const content = (
     <Card
@@ -274,6 +279,19 @@ function ProfileLink({
       </a>
     )
   }
+
+  if (onClick && !disabled) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="block w-full text-left"
+      >
+        {content}
+      </button>
+    )
+  }
+
   return content
 }
 
