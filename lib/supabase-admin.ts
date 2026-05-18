@@ -68,20 +68,28 @@ export function piUidToSyntheticEmail(piUid: string): string {
 /**
  * Find or create a Supabase Auth user for a Pi-verified Pioneer.
  *
- * The Pi UID is the source of truth for identity. This function ensures
- * a Supabase Auth user exists with that Pi UID embedded in their
- * synthetic email and user_metadata, creating one if needed.
+ * IDENTITY MODEL (updated May 18 2026):
+ *   pi_username is the canonical Pioneer identity. Pi.authenticate() on
+ *   Testnet has been observed to return DIFFERENT pi_uids for the same
+ *   Pioneer across sessions (a fresh sign-in returns one uid, a
+ *   sign-out-sign-in returns another). pi_uid is therefore treated as a
+ *   session-time attribute, not an identity. Identity is keyed on
+ *   pi_username, which Pi returns stably across all sessions.
  *
- * Returns the Supabase user ID (UUID) — this is what becomes
- * auth.uid() in RLS policies.
+ * Returns:
+ *   - supabase_user_id: what becomes auth.uid() in RLS policies
+ *   - canonical_pi_uid: the pi_uid stored in the pioneer row, which may
+ *     DIFFER from params.pi_uid if Pi rotated this session. The route
+ *     uses this for session generation so the access_token authenticates
+ *     against the canonical auth.users record, not the rotated one.
+ *   - created: true if a brand-new Pioneer was provisioned
  *
- * Lookup strategy (fastest → slowest):
- *   1. Pioneers table fast-path: O(1) indexed lookup by pi_uid.
- *   2. listUsers fallback: O(n) scan, used only if pioneers row is
- *      missing for an already-provisioned user (shouldn't happen after
- *      the backfill migration but defends against drift).
- *   3. createUser: provisions a brand-new Pioneer, then INSERTs into
- *      pioneers so the next sign-in hits the fast path.
+ * Lookup strategy (fastest → slowest, most stable → least stable):
+ *   1a. pi_username indexed lookup — the canonical key
+ *   1b. pi_uid indexed lookup — legacy compat for rows pre-dating the
+ *       username-key migration (shouldn't be reachable in practice)
+ *   2.  listUsers fallback — defends against pioneers/auth.users drift
+ *   3.  createUser — provisions a brand-new Pioneer
  *
  * Throws on any failure — the calling route should catch and return
  * a 500 to the client.
@@ -89,34 +97,73 @@ export function piUidToSyntheticEmail(piUid: string): string {
 export async function findOrCreatePioneerUser(params: {
   pi_uid: string
   pi_username: string
-}): Promise<{ supabase_user_id: string; created: boolean }> {
+}): Promise<{
+  supabase_user_id: string
+  canonical_pi_uid: string
+  created: boolean
+}> {
   const admin = createAdminClient()
-  const email = piUidToSyntheticEmail(params.pi_uid)
 
-  // --- Step 1: Fast path — pioneers table indexed lookup ---
-  const { data: pioneerRow, error: pioneerLookupError } = await admin
+  // --- Step 1a: PRIMARY lookup — by pi_username ---
+  // Username is the stable identity across Pi's session-rotated uids.
+  // Ordered by created_at to deterministically prefer the oldest row
+  // in the (currently possible) event of multiple rows per username.
+  // Once the UNIQUE(pi_username) constraint is added in a follow-up
+  // migration, this ordering becomes a no-op (only one row can exist).
+  const { data: byUsername, error: usernameLookupError } = await admin
     .from("pioneers")
-    .select("supabase_user_id")
-    .eq("pi_uid", params.pi_uid)
+    .select("supabase_user_id, pi_uid")
+    .eq("pi_username", params.pi_username)
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle()
 
-  if (pioneerLookupError) {
-    // Don't throw — fall through to the listUsers fallback. A lookup
-    // error here is recoverable (e.g. transient connection blip).
+  if (usernameLookupError) {
     console.warn(
-      "[supabase-admin] pioneers lookup failed, falling back to listUsers:",
-      pioneerLookupError.message
+      "[supabase-admin] pioneers username lookup failed, falling back to pi_uid:",
+      usernameLookupError.message
     )
   }
 
-  if (pioneerRow?.supabase_user_id) {
-    return { supabase_user_id: pioneerRow.supabase_user_id, created: false }
+  if (byUsername?.supabase_user_id && byUsername?.pi_uid) {
+    return {
+      supabase_user_id: byUsername.supabase_user_id,
+      canonical_pi_uid: byUsername.pi_uid,
+      created: false,
+    }
+  }
+
+  // --- Step 1b: SECONDARY lookup — by pi_uid (legacy compat) ---
+  // Defends against any pioneer row where pi_username was never set.
+  // Should be unreachable in practice on current schema (all rows have
+  // pi_username populated since the column was added), but kept for
+  // graceful degradation.
+  const { data: byUid, error: uidLookupError } = await admin
+    .from("pioneers")
+    .select("supabase_user_id, pi_uid")
+    .eq("pi_uid", params.pi_uid)
+    .maybeSingle()
+
+  if (uidLookupError) {
+    console.warn(
+      "[supabase-admin] pioneers uid lookup failed, falling back to listUsers:",
+      uidLookupError.message
+    )
+  }
+
+  if (byUid?.supabase_user_id && byUid?.pi_uid) {
+    return {
+      supabase_user_id: byUid.supabase_user_id,
+      canonical_pi_uid: byUid.pi_uid,
+      created: false,
+    }
   }
 
   // --- Step 2: Fallback — listUsers scan ---
-  // Only runs if the pioneers row is missing. Should be rare after the
-  // backfill migration, but exists as a defense against schema drift
-  // (e.g. a row created via SQL that didn't insert into pioneers).
+  // Only runs if no pioneers row matched either key. Defends against
+  // schema drift (e.g. a row created via SQL that didn't insert into
+  // pioneers).
+  const email = piUidToSyntheticEmail(params.pi_uid)
   const { data: existingList, error: listError } =
     await admin.auth.admin.listUsers({ page: 1, perPage: 1000 })
 
@@ -139,7 +186,11 @@ export async function findOrCreatePioneerUser(params: {
         backfillError.message
       )
     }
-    return { supabase_user_id: existing.id, created: false }
+    return {
+      supabase_user_id: existing.id,
+      canonical_pi_uid: params.pi_uid,
+      created: false,
+    }
   }
 
   // --- Step 3: Provision new user ---
@@ -178,7 +229,11 @@ export async function findOrCreatePioneerUser(params: {
     )
   }
 
-  return { supabase_user_id: newUser.user.id, created: true }
+  return {
+    supabase_user_id: newUser.user.id,
+    canonical_pi_uid: params.pi_uid,
+    created: true,
+  }
 }
 
 /**
@@ -188,6 +243,11 @@ export async function findOrCreatePioneerUser(params: {
  * use to authenticate Supabase requests. These are signed by Supabase
  * with its own private key (the asymmetric signing keys system) and
  * RLS will see them as legitimate authenticated sessions.
+ *
+ * IMPORTANT: callers must pass the CANONICAL pi_uid (from
+ * findOrCreatePioneerUser's return value), NOT whatever pi_uid Pi
+ * returned this session. Pi rotates uids across sessions; the canonical
+ * uid is the one stored in the pioneer row.
  *
  * The session is generated via signInWithPassword using a deterministic
  * synthetic password. This is acceptable because:
