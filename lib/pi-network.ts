@@ -106,7 +106,10 @@ export const authenticateWithPi = async (): Promise<PiUser> => {
  * 2. Sends the Pi access token to /api/auth/verify.
  * 3. Server calls Pi Platform /v2/me to verify the token, then provisions
  *    a Supabase Auth user and generates a real Supabase session.
- * 4. Returns a PiUser with Supabase session tokens populated.
+ * 4. Returns a PiUser with Supabase session tokens populated, with uid
+ *    set to the canonical pi_uid from the pioneer row (which may differ
+ *    from the uid Pi.authenticate() returned this session due to Testnet
+ *    uid rotation).
  *
  * Throws on any failure — caller decides whether to retry or surface
  * specific guidance to the Pioneer.
@@ -161,8 +164,15 @@ export const signInWithPi = async (): Promise<PiUser> => {
   }
 
   // Step 5: Success — return the Pioneer with Supabase session attached.
+  //
+  // CRITICAL: override piUser.uid with body.pioneer.pi_uid. The Pi SDK
+  // returns a session-rotated uid (Testnet quirk), while the server
+  // returns the CANONICAL pi_uid stored in the pioneer row. All listings
+  // and other persisted data are keyed on the canonical uid, so the
+  // frontend must use the canonical value for queries to resolve correctly.
   return {
     ...piUser,
+    uid: body.pioneer.pi_uid,
     supabaseAccessToken: body.session.access_token,
     supabaseRefreshToken: body.session.refresh_token,
     supabaseUserId: body.pioneer.supabase_user_id,
