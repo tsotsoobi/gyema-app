@@ -140,7 +140,7 @@ export function ProfileTab({ user, onSignOut, refreshKey, onNavigate }: ProfileT
                   : "Complete a delivery to start saving CO₂"}
             </p>
           </div>
-          
+          <a
             href="/methodology.html"
             target="_blank"
             rel="noopener noreferrer"

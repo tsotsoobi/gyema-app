@@ -9,7 +9,9 @@
 //   2. Frontend POSTs accessToken to this endpoint
 //   3. Server verifies the Pi accessToken with Pi Platform /v2/me
 //   4. Server finds-or-creates a Supabase Auth user mapped to Pi UID
-//   5. Server generates a real Supabase session for that user
+//      (keyed on pi_username — see findOrCreatePioneerUser for why)
+//   5. Server generates a Supabase session using the CANONICAL pi_uid
+//      from the pioneer row, not the (possibly rotated) uid Pi returned
 //   6. Frontend stores access_token + refresh_token, uses them for all
 //      Supabase requests (RLS sees auth.uid() = supabase user id)
 //
@@ -133,8 +135,15 @@ export async function POST(req: NextRequest) {
     elapsed_ms: piTokenElapsed,
   }))
 
-  // 4. Find or create the Supabase Auth user mapped to this Pi UID.
+  // 4. Find or create the Supabase Auth user mapped to this Pioneer.
+  //
+  // findOrCreatePioneerUser keys on pi_username (not pi_uid) because
+  // Pi.authenticate() on Testnet returns different pi_uids for the
+  // same Pioneer across sessions. The function returns canonical_pi_uid
+  // — the uid stored in the pioneer row — which may differ from
+  // piUser.uid received this session.
   let supabaseUserId: string
+  let canonicalPiUid: string
   let userCreated: boolean
   try {
     const result = await findOrCreatePioneerUser({
@@ -142,6 +151,7 @@ export async function POST(req: NextRequest) {
       pi_username: piUser.username,
     })
     supabaseUserId = result.supabase_user_id
+    canonicalPiUid = result.canonical_pi_uid
     userCreated = result.created
   } catch (error) {
     const elapsed = Date.now() - startedAt
@@ -166,8 +176,11 @@ export async function POST(req: NextRequest) {
     )
   }
   const provisionElapsed = Date.now() - startedAt
+  const piUidRotated = canonicalPiUid !== piUser.uid
   console.log("[auth/verify] User provisioned", {
-    pi_uid: shortId(piUser.uid),
+    pi_uid_received: shortId(piUser.uid),
+    pi_uid_canonical: shortId(canonicalPiUid),
+    pi_uid_rotated: piUidRotated,
     supabase_user_id: shortId(supabaseUserId),
     created: userCreated,
     ms: provisionElapsed,
@@ -179,25 +192,36 @@ export async function POST(req: NextRequest) {
     pi_username: piUser.username,
     user_created: userCreated,
     elapsed_ms: provisionElapsed,
+    metadata: piUidRotated
+      ? {
+          pi_uid_rotated: true,
+          pi_uid_canonical_prefix: shortId(canonicalPiUid),
+        }
+      : undefined,
   }))
 
   // 5. Generate a Supabase session for the Pioneer.
+  //
+  // Use canonical_pi_uid (the uid stored in the pioneer row), NOT
+  // piUser.uid (which may be a session-rotated uid from Pi). This
+  // ensures the session authenticates against the canonical auth.users
+  // record so RLS-filtered queries see the Pioneer's full history.
   let session: { access_token: string; refresh_token: string }
   try {
-    session = await generatePioneerSession({ pi_uid: piUser.uid })
+    session = await generatePioneerSession({ pi_uid: canonicalPiUid })
   } catch (error) {
     const elapsed = Date.now() - startedAt
     const errorMessage =
       error instanceof Error ? error.message : String(error)
     console.error("[auth/verify] Session generation failed", {
-      pi_uid: shortId(piUser.uid),
+      pi_uid: shortId(canonicalPiUid),
       supabase_user_id: shortId(supabaseUserId),
       error: errorMessage,
       ms: elapsed,
     })
     waitUntil(logAuthEvent({
       event_type: "failed_session",
-      pi_uid_prefix: shortId(piUser.uid),
+      pi_uid_prefix: shortId(canonicalPiUid),
       supabase_user_id_prefix: shortId(supabaseUserId),
       pi_username: piUser.username,
       error_message: errorMessage,
@@ -213,7 +237,7 @@ export async function POST(req: NextRequest) {
   // 6. Success.
   const totalElapsed = Date.now() - startedAt
   console.log("[auth/verify] Sign-in complete", {
-    pi_uid: shortId(piUser.uid),
+    pi_uid_canonical: shortId(canonicalPiUid),
     pi_username: piUser.username,
     supabase_user_id: shortId(supabaseUserId),
     new_user: userCreated,
@@ -221,17 +245,21 @@ export async function POST(req: NextRequest) {
   })
   waitUntil(logAuthEvent({
     event_type: "sign_in_complete",
-    pi_uid_prefix: shortId(piUser.uid),
+    pi_uid_prefix: shortId(canonicalPiUid),
     supabase_user_id_prefix: shortId(supabaseUserId),
     pi_username: piUser.username,
     user_created: userCreated,
     elapsed_ms: totalElapsed,
   }))
 
+  // Response uses canonical_pi_uid so the frontend's idea of "my pi_uid"
+  // matches what's stored in the database. This is important for any
+  // client-side code that uses pioneer.pi_uid for further queries or
+  // display.
   const response: GateSuccess = {
     ok: true,
     pioneer: {
-      pi_uid: piUser.uid,
+      pi_uid: canonicalPiUid,
       pi_username: piUser.username,
       supabase_user_id: supabaseUserId,
     },
