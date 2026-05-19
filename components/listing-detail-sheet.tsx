@@ -319,7 +319,10 @@ export function ListingDetailSheet({
 
   return (
     <Sheet open onOpenChange={onClose}>
-      <SheetContent side="bottom" className="rounded-t-2xl px-4 pb-6 pt-4">
+      <SheetContent
+        side="bottom"
+        className="rounded-t-2xl px-4 pb-6 pt-4 max-h-[90dvh] overflow-y-auto"
+      >
         <SheetHeader className="text-left space-y-1 pb-3">
           <div className="flex items-center justify-between">
             <Badge variant={statusBadge.variant} className="text-xs">
