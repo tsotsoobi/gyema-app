@@ -131,7 +131,7 @@ export function ProfileTab({ user, onSignOut, refreshKey, onNavigate }: ProfileT
         <Card className="p-4 flex items-center gap-3">
           <div className="text-2xl">🌱</div>
           <div className="flex-1 min-w-0">
-            <p className="font-semibold text-sm">Your Impact</p>
+            <p className="font-semibold text-sm">My Impact</p>
             <p className="text-xs text-muted-foreground">
               {loading
                 ? "Loading…"
