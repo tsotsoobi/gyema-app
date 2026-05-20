@@ -14,7 +14,7 @@ Built to match the [Railway design preview](https://gyema-backend-production.up.
 - ✅ My Trips / My Activity with status badges.
 - ✅ Tracking lookup by `GYM-XXXXXX` ID.
 - ✅ Profile with stats, KYC link to `minepi.com/kyc`, sign-out.
-- ✅ All four tabs: Home, My Trips, Track, Profile.
+- ✅ All four tabs: Home, My Activity, Track, Profile.
 - ✅ Listings persist between sessions (localStorage).
 
 **Honest "Coming soon" markers (v2):**
