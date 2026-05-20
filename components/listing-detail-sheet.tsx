@@ -151,7 +151,7 @@ export function ListingDetailSheet({
       )}`
     : null
 
-  const piChatHref = "https://chat.pinet.com/home"
+  const piChatHref = "https://chat.pinet.com/conversation-requests"
 
   // Guest detection — guests are blocked from all write actions
   // (Accept, Mark Complete, Cancel match) since these mutations require
@@ -433,7 +433,7 @@ export function ListingDetailSheet({
                       variant="outline"
                       className="w-full h-11 text-sm font-semibold"
                     >
-                      🥧 Chat in Pi
+                      π Chat in Pi
                     </Button>
                   </a>
                 </div>
