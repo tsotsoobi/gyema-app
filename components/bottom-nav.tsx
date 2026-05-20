@@ -11,7 +11,7 @@ interface BottomNavProps {
 
 const tabs: Array<{ id: Tab; icon: string; label: string }> = [
   { id: "home", icon: "🏠", label: "Home" },
-  { id: "trips", icon: "✈️", label: "My Trips" },
+  { id: "trips", icon: "✈️", label: "My Activity" },
   { id: "track", icon: "📍", label: "Track" },
   { id: "profile", icon: "👤", label: "Profile" },
 ]

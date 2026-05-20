@@ -154,7 +154,7 @@ export function ProfileTab({ user, onSignOut, refreshKey, onNavigate }: ProfileT
       <div className="space-y-2">
         <ProfileLink
           icon="✈️"
-          title="My Trips"
+          title="My Activity"
           subtitle={loading ? "Loading…" : `${tripCount} registered`}
           onClick={() => onNavigate("trips")}
         />
