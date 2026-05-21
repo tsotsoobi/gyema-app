@@ -84,30 +84,6 @@ export function TripsTab({ user, role, refreshKey, onCreated, onSignedIn }: Trip
         </Badge>
       </div>
 
-      {role === "traveller" && (
-        <Button
-          variant={showForm ? "outline" : "default"}
-          className="w-full h-12 text-base font-semibold"
-          onClick={() => setShowForm(!showForm)}
-        >
-          {showForm ? "Cancel" : "✈️ Register a Trip"}
-        </Button>
-      )}
-
-      {role === "traveller" && showForm && (
-        viewerIsGuest ? (
-          <GuestPostGate context="trip" onSignedIn={onSignedIn} />
-        ) : (
-          <RegisterTripForm
-            user={user}
-            onDone={() => {
-              setShowForm(false)
-              onCreated()
-            }}
-          />
-        )
-      )}
-
       {/* Active section */}
       <div className="space-y-2 pt-2">
         <h3 className="text-sm font-medium text-muted-foreground">
@@ -120,7 +96,9 @@ export function TripsTab({ user, role, refreshKey, onCreated, onSignedIn }: Trip
             <p className="text-sm font-medium">Nothing here yet</p>
             <p className="text-xs text-muted-foreground">
               {viewerIsGuest
-                ? "Sign in with Pi to start posting trips and deliveries."
+                ? role === "traveller"
+                  ? "Sign in with Pi to register your first trip."
+                  : "Sign in with Pi to post your first delivery."
                 : role === "traveller"
                   ? "Register your first trip to start earning Pi."
                   : "Post a delivery from the Home tab."}
@@ -132,6 +110,51 @@ export function TripsTab({ user, role, refreshKey, onCreated, onSignedIn }: Trip
           ))
         )}
       </div>
+
+      {/* Post entry-point — Traveller and Sender variants.
+          Sender variant is guest-only by design: signed-in Senders post from the Home tab.
+          Button styling mirrors home-tab.tsx exactly (default variant, no custom colors). */}
+      {role === "traveller" && (
+        <>
+          <Button
+            variant={showForm ? "outline" : "default"}
+            className="w-full h-12 text-base font-semibold"
+            onClick={() => setShowForm(!showForm)}
+          >
+            {showForm ? "Cancel" : "✈️ Register a Trip"}
+          </Button>
+
+          {showForm && (
+            viewerIsGuest ? (
+              <GuestPostGate context="trip" onSignedIn={onSignedIn} />
+            ) : (
+              <RegisterTripForm
+                user={user}
+                onDone={() => {
+                  setShowForm(false)
+                  onCreated()
+                }}
+              />
+            )
+          )}
+        </>
+      )}
+
+      {role === "sender" && viewerIsGuest && (
+        <>
+          <Button
+            variant={showForm ? "outline" : "default"}
+            className="w-full h-12 text-base font-semibold"
+            onClick={() => setShowForm(!showForm)}
+          >
+            {showForm ? "Cancel" : "📦 Post a Delivery"}
+          </Button>
+
+          {showForm && (
+            <GuestPostGate context="package" onSignedIn={onSignedIn} />
+          )}
+        </>
+      )}
 
       {/* Past section — only renders if user has any past listings */}
       {pastListings.length > 0 && (
