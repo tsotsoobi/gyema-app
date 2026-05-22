@@ -632,7 +632,7 @@ function GuestActionGate({
       <div className="space-y-2">
         <h3 className="font-semibold text-base">{headline}</h3>
         <p className="text-sm text-muted-foreground leading-relaxed">
-          Posting on Gyema requires a Pi identity. This keeps every trip and
+          Accepting on Gyema requires a Pi identity. This keeps every trip and
           delivery traceable to a real Pioneer.
         </p>
       </div>
