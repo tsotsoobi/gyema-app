@@ -43,7 +43,7 @@ export function WelcomeSheet({ onDismiss }: WelcomeSheetProps) {
               <p className="font-semibold text-sm">Sender mode</p>
               <p className="text-xs text-muted-foreground leading-relaxed mt-0.5">
                 Post packages and connect with travellers. Coordinate
-                pickup, dropoff, and Pi payment via WhatsApp.
+                pickup, dropoff, and Pi payment via Pi Chat or WhatsApp.
               </p>
             </div>
           </section>
@@ -54,7 +54,7 @@ export function WelcomeSheet({ onDismiss }: WelcomeSheetProps) {
               <p className="font-semibold text-sm">Stay safe</p>
               <p className="text-xs text-muted-foreground leading-relaxed mt-0.5">
                 Gyema connects users — payments and coordination happen on
-                WhatsApp. Verify identity via Pi KYC before sending
+                Pi Chat or WhatsApp. Verify identity via Pi KYC before sending
                 valuables.
               </p>
             </div>
