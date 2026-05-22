@@ -138,6 +138,7 @@ export default function Gyema() {
           onSignOut={handleSignOut}
           refreshKey={refreshKey}
           onNavigate={setActiveTab}
+          onSignedIn={handleSignedIn}
         />
       )}
 
