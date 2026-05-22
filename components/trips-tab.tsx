@@ -3,27 +3,10 @@
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  type Listing,
-  type PackageSize,
-} from "@/lib/listings"
-import {
-  createTripAsync,
-  getListingsByUserAsync,
-} from "@/lib/listings-async"
+import { type Listing } from "@/lib/listings"
+import { getListingsByUserAsync } from "@/lib/listings-async"
 import { isGuest, type PiUser, type UserRole } from "@/lib/pi-network"
-import { GuestPostGate } from "./guest-post-gate"
 
 interface TripsTabProps {
   user: PiUser
@@ -31,6 +14,7 @@ interface TripsTabProps {
   refreshKey: number
   onCreated: () => void
   onSignedIn: (user: PiUser) => void
+  onNavigate: (tab: "home" | "trips" | "track" | "profile") => void
 }
 
 // Statuses considered "past" — listings the user has finished with.
@@ -38,8 +22,7 @@ interface TripsTabProps {
 // 'completed' is reserved for the v2 confirmation flow.
 const PAST_STATUSES = new Set(["expired", "completed"])
 
-export function TripsTab({ user, role, refreshKey, onCreated, onSignedIn }: TripsTabProps) {
-  const [showForm, setShowForm] = useState(false)
+export function TripsTab({ user, role, refreshKey, onNavigate }: TripsTabProps) {
   const [myListings, setMyListings] = useState<Listing[]>([])
 
   useEffect(() => {
@@ -74,6 +57,12 @@ export function TripsTab({ user, role, refreshKey, onCreated, onSignedIn }: Trip
 
   const viewerIsGuest = isGuest(user)
 
+  // My Activity is a review surface. Posting affordances on this tab are
+  // discovery entry-points that navigate the user to Home, which is the
+  // canonical posting surface. This keeps the post-form code in a single
+  // place (home-tab.tsx) without duplicating across tabs.
+  const handlePostNav = () => onNavigate("home")
+
   return (
     <div className="px-4 py-4 space-y-3" data-refresh={refreshKey}>
       <div className="flex items-center justify-between">
@@ -83,6 +72,17 @@ export function TripsTab({ user, role, refreshKey, onCreated, onSignedIn }: Trip
           {role === "traveller" ? "trips" : "deliveries"}
         </Badge>
       </div>
+
+      {/* Post entry-point — renders ABOVE the Active section as the primary
+          tab action. Both roles see this regardless of guest/signed-in status;
+          the button navigates to Home where the canonical post form lives. */}
+      <Button
+        variant="default"
+        className="w-full h-12 text-base font-semibold"
+        onClick={handlePostNav}
+      >
+        {role === "traveller" ? "✈️ Register a Trip" : "📦 Post a Delivery"}
+      </Button>
 
       {/* Active section */}
       <div className="space-y-2 pt-2">
@@ -101,7 +101,7 @@ export function TripsTab({ user, role, refreshKey, onCreated, onSignedIn }: Trip
                   : "Sign in with Pi to post your first delivery."
                 : role === "traveller"
                   ? "Register your first trip to start earning Pi."
-                  : "Post a delivery from the Home tab."}
+                  : "Post a delivery to find a Traveller."}
             </p>
           </Card>
         ) : (
@@ -110,51 +110,6 @@ export function TripsTab({ user, role, refreshKey, onCreated, onSignedIn }: Trip
           ))
         )}
       </div>
-
-      {/* Post entry-point — Traveller and Sender variants.
-          Sender variant is guest-only by design: signed-in Senders post from the Home tab.
-          Button styling mirrors home-tab.tsx exactly (default variant, no custom colors). */}
-      {role === "traveller" && (
-        <>
-          <Button
-            variant={showForm ? "outline" : "default"}
-            className="w-full h-12 text-base font-semibold"
-            onClick={() => setShowForm(!showForm)}
-          >
-            {showForm ? "Cancel" : "✈️ Register a Trip"}
-          </Button>
-
-          {showForm && (
-            viewerIsGuest ? (
-              <GuestPostGate context="trip" onSignedIn={onSignedIn} />
-            ) : (
-              <RegisterTripForm
-                user={user}
-                onDone={() => {
-                  setShowForm(false)
-                  onCreated()
-                }}
-              />
-            )
-          )}
-        </>
-      )}
-
-      {role === "sender" && viewerIsGuest && (
-        <>
-          <Button
-            variant={showForm ? "outline" : "default"}
-            className="w-full h-12 text-base font-semibold"
-            onClick={() => setShowForm(!showForm)}
-          >
-            {showForm ? "Cancel" : "📦 Post a Delivery"}
-          </Button>
-
-          {showForm && (
-            <GuestPostGate context="package" onSignedIn={onSignedIn} />
-          )}
-        </>
-      )}
 
       {/* Past section — only renders if user has any past listings */}
       {pastListings.length > 0 && (
@@ -228,149 +183,6 @@ function ListingCard({
       <p className="font-mono text-[10px] text-muted-foreground">
         {listing.trackingId}
       </p>
-    </Card>
-  )
-}
-
-function RegisterTripForm({
-  user,
-  onDone,
-}: {
-  user: PiUser
-  onDone: () => void
-}) {
-  const [fromCity, setFromCity] = useState("")
-  const [toCity, setToCity] = useState("")
-  const [travelDate, setTravelDate] = useState("")
-  const [capacity, setCapacity] = useState<PackageSize | "">("")
-  const [pricePi, setPricePi] = useState("")
-  const [notes, setNotes] = useState("")
-  const [whatsapp, setWhatsapp] = useState("")
-  const [submitting, setSubmitting] = useState(false)
-
-  const valid = fromCity && toCity && travelDate && capacity && pricePi && whatsapp
-
-  const handleSubmit = async () => {
-    if (!valid || submitting) return
-    setSubmitting(true)
-    try {
-      await createTripAsync({
-        fromCity: fromCity.trim(),
-        toCity: toCity.trim(),
-        travelDate,
-        capacity: capacity as PackageSize,
-        pricePi: parseFloat(pricePi),
-        notes: notes.trim(),
-        whatsapp: whatsapp.trim(),
-        postedById: user.uid,
-        postedByUsername: user.username,
-      })
-      onDone()
-    } catch (e) {
-      console.error("[gyema] Could not register trip:", e)
-      alert("Could not register your trip. Check your connection and try again.")
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <Card className="p-4 space-y-3">
-      <h3 className="font-semibold">Register a Trip</h3>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label htmlFor="t-from">From</Label>
-          <Input
-            id="t-from"
-            placeholder="Accra"
-            value={fromCity}
-            onChange={(e) => setFromCity(e.target.value)}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="t-to">To</Label>
-          <Input
-            id="t-to"
-            placeholder="Kumasi"
-            value={toCity}
-            onChange={(e) => setToCity(e.target.value)}
-          />
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <Label htmlFor="t-date">Travel Date</Label>
-        <Input
-          id="t-date"
-          type="date"
-          value={travelDate}
-          onChange={(e) => setTravelDate(e.target.value)}
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label htmlFor="t-cap">Capacity</Label>
-        <Select value={capacity} onValueChange={(v) => setCapacity(v as PackageSize)}>
-          <SelectTrigger id="t-cap">
-            <SelectValue placeholder="Select capacity" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="envelope">Envelope only</SelectItem>
-            <SelectItem value="small">Small package</SelectItem>
-            <SelectItem value="medium">Medium package</SelectItem>
-            <SelectItem value="large">Large package</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div className="space-y-1.5">
-        <Label htmlFor="t-price">Asking Price (π)</Label>
-        <Input
-          id="t-price"
-          type="number"
-          inputMode="decimal"
-          step="0.1"
-          min="0"
-          placeholder="5"
-          value={pricePi}
-          onChange={(e) => setPricePi(e.target.value)}
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label htmlFor="t-whatsapp">WhatsApp Number</Label>
-        <Input
-          id="t-whatsapp"
-          type="tel"
-          inputMode="tel"
-          placeholder="+233 24 123 4567"
-          value={whatsapp}
-          onChange={(e) => setWhatsapp(e.target.value)}
-        />
-        <p className="text-[11px] text-muted-foreground">
-          Senders will use this to coordinate with you.
-        </p>
-      </div>
-
-      <div className="space-y-1.5">
-        <Label htmlFor="t-notes">Notes (optional)</Label>
-        <Textarea
-          id="t-notes"
-          rows={2}
-          placeholder="e.g. departing morning, no fragile items"
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-        />
-      </div>
-
-      <Button
-        className="w-full h-11 font-semibold"
-        onClick={handleSubmit}
-        disabled={!valid || submitting}
-      >
-        {submitting ? "Posting..." : "Post Trip"}
-      </Button>
     </Card>
   )
 }
