@@ -14,7 +14,7 @@ Built to match the [Railway design preview](https://gyema-backend-production.up.
 - ✅ My Trips / My Activity with status badges.
 - ✅ Tracking lookup by `GYM-XXXXXX` ID.
 - ✅ Profile with stats, KYC link to `minepi.com/kyc`, sign-out.
-- ✅ All four tabs: Home, My Activity, Track, Profile.
+- ✅ All four tabs: Home, My Trips, Track, Profile.
 - ✅ Listings persist between sessions (localStorage).
 
 **Honest "Coming soon" markers (v2):**
@@ -25,6 +25,14 @@ Built to match the [Railway design preview](https://gyema-backend-production.up.
 - ⏳ Dispute Center.
 
 These are visible in the UI as "Coming soon" rather than fake buttons that disappoint Pioneers and tank your engagement threshold.
+
+## Smart contracts (V2)
+
+V1 of Gyema uses `Pi.createPayment()` for all payment flows. V2 will introduce on-chain escrow with rider performance bonds and admin-arbitrated dispute resolution, deployed as Soroban smart contracts on Pi Mainnet (Protocol 23+).
+
+The contract source lives in a separate repository: **[tsotsoobi/gyema-contracts](https://github.com/tsotsoobi/gyema-contracts)**.
+
+The contracts are not yet deployed. V2 deployment work begins after the December 19, 2026 gyema.pi domain claim is secured.
 
 ## Why your previous Pi App Studio submission failed
 
@@ -38,7 +46,7 @@ I noticed this while comparing your two projects. PiLApp is missing the Pi SDK s
 
 **To fix PiLApp**, add this to PiLApp's `app/layout.tsx` body, right before `{children}`:
 
-```tsx
+```jsx
 <Script src="https://sdk.minepi.com/pi-sdk.js" strategy="beforeInteractive" />
 <Script id="pi-init" strategy="beforeInteractive">
   {`try { if (typeof Pi !== 'undefined') Pi.init({ version: "2.0", sandbox: true }); } catch(e){}`}
@@ -53,7 +61,7 @@ Pi App Studio's build needs a `dist/` or `.next/` output directory, which means 
 
 ### Option A — StackBlitz (works in your phone browser)
 
-1. Go to https://stackblitz.com on your phone, sign in (free)
+1. Go to <https://stackblitz.com> on your phone, sign in (free)
 2. Tap "Create new" → "Next.js" template, then upload this zip's contents (or drag-drop)
 3. StackBlitz auto-installs and runs `npm run dev` — you can preview live
 4. Tap "Download" to get the built version
@@ -61,7 +69,7 @@ Pi App Studio's build needs a `dist/` or `.next/` output directory, which means 
 ### Option B — Vercel (recommended, set up once)
 
 1. Push this folder to a new GitHub repo (use the GitHub mobile app)
-2. Go to https://vercel.com on your phone, sign in with GitHub
+2. Go to <https://vercel.com> on your phone, sign in with GitHub
 3. "Add New Project" → import your repo
 4. Vercel auto-detects Next.js, builds, and gives you a `*.vercel.app` URL
 5. Every push to GitHub re-deploys automatically
@@ -82,8 +90,8 @@ Once deployed at a URL (e.g. `gyema.vercel.app` or your existing Netlify URL):
 
 1. Open Pi Browser → `develop.pi`
 2. Find the Gyema app entry → set:
-   - **Development URL** = your deploy URL (e.g. `https://gyema.vercel.app`)
-   - **Production URL** = `https://gyema.pinet.com`
+  - **Development URL** = your deploy URL (e.g. `https://gyema.vercel.app`)
+  - **Production URL** = `https://gyema.pinet.com`
 3. Place the validation string Pi gives you into a file in `public/` named exactly what Pi specifies (replaces my placeholder)
 4. Click "Verify domain" in the portal
 
@@ -128,4 +136,9 @@ gyema/
 2. **Test in Pi Browser** — tap "Sign in with Pi", verify it actually prompts for permissions (it should, unlike PiLApp).
 3. **Verify domain** in Pi Developer Portal.
 4. **Get 5 KYC-verified Pioneers to test it** — required for your December 19 threshold.
-5. **Then** start v2: backend (Supabase), real escrow, GPS tracking.
+5. **Then** start v2: backend (Supabase), real escrow (see [gyema-contracts](https://github.com/tsotsoobi/gyema-contracts)), GPS tracking.
+
+## Related
+
+- [gyema-contracts](https://github.com/tsotsoobi/gyema-contracts) — Soroban smart contracts for V2 escrow
+- [Pi Logistics Ltd.](https://pillgh.com) — the company behind Gyema
