@@ -1,144 +1,159 @@
-# Gyema — P2P Delivery on Pi
+# Gyema
 
-Built to match the [Railway design preview](https://gyema-backend-production.up.railway.app/), structured exactly like PiLApp so Pi App Studio accepts it, with a working Pi SDK integration that PiLApp itself is missing.
+**Peer-to-peer delivery on Pi Network, built for Ghana and pan-African expansion.**
 
-## What's in this build (v1)
+Gyema connects two sides of every delivery: **Senders** with packages to move, and **Travellers** already making the trip. Pi is the payment rail. The platform runs on Pi Testnet today and is built to migrate to Mainnet once Pi Core Team enables Soroban deployment for third-party apps.
 
-**Real, working features:**
+- Production: [gyema-app.vercel.app](https://gyema-app.vercel.app)
+- V2 escrow contracts: [tsotsoobi/gyema-contracts](https://github.com/tsotsoobi/gyema-contracts)
+- Company: [Pi Logistics Ltd.](https://pillgh.com)
 
-- ✅ **Sign in with Pi** — uses the official Pi SDK, no mocks. Loads via `<Script src="https://sdk.minepi.com/pi-sdk.js" strategy="beforeInteractive">` in `app/layout.tsx`.
-- ✅ Continue as Guest — for previewing the UI outside Pi Browser.
-- ✅ Two roles: **Traveller** and **Sender** (toggle in header).
-- ✅ Post a Trip (Traveller) and Post a Delivery (Sender).
-- ✅ Available Jobs feed.
-- ✅ My Trips / My Activity with status badges.
-- ✅ Tracking lookup by `GYM-XXXXXX` ID.
-- ✅ Profile with stats, KYC link to `minepi.com/kyc`, sign-out.
-- ✅ All four tabs: Home, My Trips, Track, Profile.
-- ✅ Listings persist between sessions (localStorage).
+---
 
-**Honest "Coming soon" markers (v2):**
+## Architecture
 
-- ⏳ Pi Escrow Payment modal — clearly labeled "v2", button is disabled. Real escrow needs a backend server holding the Pi API key.
-- ⏳ Cross-device listing sync — v1 listings are device-local. Pioneer A's posts aren't visible to Pioneer B until v2 backend (Supabase) is added.
-- ⏳ Live GPS tracking.
-- ⏳ Dispute Center.
+### Stack
 
-These are visible in the UI as "Coming soon" rather than fake buttons that disappoint Pioneers and tank your engagement threshold.
+- **Frontend:** Next.js (App Router) on Vercel
+- **Auth & data:** Supabase (Postgres, asymmetric ECC P-256 JWT signing)
+- **Identity provider:** Pi Network SDK (`Pi.authenticate` → Pi Platform `/v2/me`)
+- **V2 escrow (in development):** Soroban smart contracts on Pi Mainnet (Protocol 23+)
 
-## Smart contracts (V2)
+### Pi → Supabase auth bridge
 
-V1 of Gyema uses `Pi.createPayment()` for all payment flows. V2 will introduce on-chain escrow with rider performance bonds and admin-arbitrated dispute resolution, deployed as Soroban smart contracts on Pi Mainnet (Protocol 23+).
-
-The contract source lives in a separate repository: **[tsotsoobi/gyema-contracts](https://github.com/tsotsoobi/gyema-contracts)**.
-
-The contracts are not yet deployed. V2 deployment work begins after the December 19, 2026 gyema.pi domain claim is secured.
-
-## Why your previous Pi App Studio submission failed
-
-Pi App Studio's export gave you a project missing: `package.json`, `app/page.tsx`, `next.config.mjs`, `tsconfig.json`, and `lib/pi-network.ts`. Without these, there's no app to render and no `npm run build` for Pi App Studio's validator to run.
-
-This rebuild has all of those.
-
-## Why PiLApp's "Sign in with Pi" doesn't work either
-
-I noticed this while comparing your two projects. PiLApp is missing the Pi SDK script tag in `app/layout.tsx`. Without it, `window.Pi` is `undefined` when the sign-in button is clicked, and PiLApp's `lib/pi-network.ts` silently substitutes a mock — so you get fake users instead of real Pi authentication.
-
-**To fix PiLApp**, add this to PiLApp's `app/layout.tsx` body, right before `{children}`:
-
-```jsx
-<Script src="https://sdk.minepi.com/pi-sdk.js" strategy="beforeInteractive" />
-<Script id="pi-init" strategy="beforeInteractive">
-  {`try { if (typeof Pi !== 'undefined') Pi.init({ version: "2.0", sandbox: true }); } catch(e){}`}
-</Script>
-```
-
-And add `import Script from "next/script"` at the top of that file. That single change should make PiLApp's sign-in actually authenticate.
-
-## Deploying from your Android phone (no terminal)
-
-Pi App Studio's build needs a `dist/` or `.next/` output directory, which means running `npm install` and `npm run build` somewhere first.
-
-### Option A — StackBlitz (works in your phone browser)
-
-1. Go to <https://stackblitz.com> on your phone, sign in (free)
-2. Tap "Create new" → "Next.js" template, then upload this zip's contents (or drag-drop)
-3. StackBlitz auto-installs and runs `npm run dev` — you can preview live
-4. Tap "Download" to get the built version
-
-### Option B — Vercel (recommended, set up once)
-
-1. Push this folder to a new GitHub repo (use the GitHub mobile app)
-2. Go to <https://vercel.com> on your phone, sign in with GitHub
-3. "Add New Project" → import your repo
-4. Vercel auto-detects Next.js, builds, and gives you a `*.vercel.app` URL
-5. Every push to GitHub re-deploys automatically
-
-Vercel is the easiest long-term because future edits via GitHub mobile auto-deploy.
-
-### Option C — Netlify (your existing setup)
-
-Netlify also works for Next.js but needs the `@netlify/plugin-nextjs` plugin. If you stick with Netlify:
-
-1. Push this folder to GitHub
-2. In Netlify, "Import from Git" → connect the repo
-3. Netlify reads `next.config.mjs` and builds with the Next.js plugin
-
-## Connecting to Pi App Studio
-
-Once deployed at a URL (e.g. `gyema.vercel.app` or your existing Netlify URL):
-
-1. Open Pi Browser → `develop.pi`
-2. Find the Gyema app entry → set:
-  - **Development URL** = your deploy URL (e.g. `https://gyema.vercel.app`)
-  - **Production URL** = `https://gyema.pinet.com`
-3. Place the validation string Pi gives you into a file in `public/` named exactly what Pi specifies (replaces my placeholder)
-4. Click "Verify domain" in the portal
-
-## Going to production
-
-When you're ready to ship to mainnet, change one line in `app/layout.tsx`:
-
-```js
-Pi.init({ version: "2.0", sandbox: true });   // ← change to:
-Pi.init({ version: "2.0" });
-```
-
-Then redeploy.
-
-## File structure
+The non-trivial piece. Pi issues access tokens for Pioneers; Supabase requires its own JWTs signed with ECC P-256. The bridge reconciles the two:
 
 ```
-gyema/
+Pi.authenticate(scopes)
+      │
+      ▼
+POST /api/auth/verify   ──▶  Pi Platform /v2/me   (verifies access token)
+      │
+      ▼
+findOrCreatePioneerUser  (keyed on pi_username, not pi_uid — see notes below)
+      │
+      ▼
+Supabase Admin API       (provisions auth user with synthetic email + deterministic password)
+      │
+      ▼
+generatePioneerSession   (in-memory; no localStorage)
+```
+
+Key files:
+- `lib/pi-platform.ts` — Pi `/v2/me` verification
+- `lib/supabase-admin.ts` — Supabase admin-API provisioning
+- `app/api/auth/verify/route.ts` — bridge endpoint
+- `lib/pi-network.ts` — client-side Pi SDK wrapper
+- `lib/supabase.ts` — Supabase client
+
+### Why username-keyed reconciliation
+
+Pi Testnet rotates `pi_uid` values across sessions for the same Pioneer (~0.16% rate observed at production scale). `pi_username` is the stable identity anchor. `findOrCreatePioneerUser` resolves identity in three tiers: indexed lookup on `pi_username` (primary), indexed lookup on `pi_uid` (legacy compat), then a `listUsers` fallback that defends against schema drift. The function returns the **canonical** `pi_uid` stored in the Pioneer row, which `generatePioneerSession` must use — passing the rotated session-time uid would authenticate against the wrong `auth.users` record.
+
+This is the kind of platform-level behavior that's not documented and only surfaces under real user load. It's worth flagging for anyone building on Pi: **never key user reconciliation on `pi_uid`**.
+
+### Supabase Auth storage
+
+Supabase Auth users are provisioned with synthetic non-routable emails (`pi-{uid}@gyema.local`, using the IETF-reserved `.local` TLD) and deterministic HMAC-SHA256-derived passwords keyed by a server secret. The actual auth gate is Pi KYC; Supabase Auth is session storage.
+
+### Observability
+
+Every auth bridge call writes to an `auth_events` table with:
+- `pi_uid_prefix`, `pi_username`, `supabase_user_id_prefix`
+- `user_created` (true on first-time provisioning)
+- `error_message`, `elapsed_ms`
+- `metadata` jsonb (including `pi_uid_rotated` diagnostic flag)
+
+Recent 7-day metrics: ~1,100 events, ~45 new Pioneers/day, 0 errors, 0.36% pi_uid rotation rate, avg latency 829–1,784 ms.
+
+---
+
+## V2 — On-chain escrow
+
+V1 uses `Pi.createPayment()` for delivery payments. V2 introduces a three-pot escrow with rider performance bonds and admin-arbitrated dispute resolution, deployed as Soroban smart contracts on Pi Mainnet.
+
+Design highlights (full source at [gyema-contracts](https://github.com/tsotsoobi/gyema-contracts)):
+- **Customer-confirms-primary release** with 24h rider timeout fallback
+- **Atomic two-sided funding** — customer fee and rider bond move in a single transaction
+- **Either-party dispute** within the confirmation window
+- **Explicit `Allocation` resolution** — admin must supply amounts that sum to exactly the pot
+- **Self-deal blocked** at contract level
+- 762 lines of Rust, 12 passing tests, full CI green
+
+V2 deployment work begins after the gyema.pi domain claim (December 19, 2026) and once Pi Core Team enables Soroban deployment for third-party apps.
+
+---
+
+## Roles and flows
+
+Two roles, toggled in the app header:
+
+- **Sender** — posts a delivery (package, route, fee in Pi)
+- **Traveller** — posts a trip and accepts matching deliveries
+
+Listings persist server-side via Supabase. Tracking IDs are issued as `GYM-XXXXXX`.
+
+---
+
+## Repository layout
+
+```
+gyema-app/
 ├── app/
-│   ├── layout.tsx        ← Pi SDK script lives here (THE fix)
-│   ├── page.tsx          ← Main routing & state
-│   └── globals.css       ← Purple Pi-branded theme
+│   ├── api/auth/verify/route.ts   ← Pi → Supabase auth bridge
+│   ├── layout.tsx
+│   └── page.tsx
 ├── components/
-│   ├── sign-in.tsx       ← Real Pi auth
-│   ├── app-header.tsx    ← Traveller/Sender toggle + π balance
-│   ├── bottom-nav.tsx    ← 4 tabs
-│   ├── home-tab.tsx      ← Available Jobs / Post a Delivery
-│   ├── trips-tab.tsx     ← My Activity + Register a Trip
-│   ├── track-tab.tsx     ← Tracking ID lookup
-│   ├── profile-tab.tsx   ← KYC link, stats, sign-out
-│   ├── listing-detail-sheet.tsx  ← With "Coming soon" escrow modal
-│   └── ui/               ← shadcn primitives (from PiLApp scaffold)
+│   ├── sign-in.tsx
+│   ├── app-header.tsx
+│   ├── bottom-nav.tsx
+│   ├── home-tab.tsx
+│   ├── trips-tab.tsx
+│   ├── track-tab.tsx
+│   ├── profile-tab.tsx
+│   ├── listing-detail-sheet.tsx
+│   ├── welcome-sheet.tsx
+│   └── ui/                        ← shadcn primitives
 ├── lib/
-│   ├── pi-network.ts     ← Real SDK calls, no silent mocks
-│   └── listings.ts       ← localStorage v1 (TODO: backend in v2)
-└── package.json          ← Same Next.js stack as PiLApp
+│   ├── pi-network.ts              ← client-side Pi SDK wrapper
+│   ├── pi-platform.ts             ← Pi /v2/me verification
+│   ├── supabase.ts                ← Supabase client
+│   ├── supabase-admin.ts          ← admin-API provisioning
+│   └── listings.ts
+└── package.json
 ```
 
-## What to do next
+---
 
-1. **Deploy** (StackBlitz or Vercel, instructions above).
-2. **Test in Pi Browser** — tap "Sign in with Pi", verify it actually prompts for permissions (it should, unlike PiLApp).
-3. **Verify domain** in Pi Developer Portal.
-4. **Get 5 KYC-verified Pioneers to test it** — required for your December 19 threshold.
-5. **Then** start v2: backend (Supabase), real escrow (see [gyema-contracts](https://github.com/tsotsoobi/gyema-contracts)), GPS tracking.
+## Environment
+
+Production requires these Vercel environment variables:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `PI_API_KEY`
+- `PIONEER_PASSWORD_SALT`
+
+Mainnet vs. Testnet is controlled in the Pi Developer Portal app configuration; the frontend reads it from the Pi SDK at runtime.
+
+---
+
+## Status
+
+- **Network:** Pi Testnet (Protocol 23)
+- **Current rating:** 4.8★ across 227 raters (as of May 24, 2026)
+- **First completed delivery:** GYM-719D42, Accra → Tema, 2026-05-07
+
+---
 
 ## Related
 
-- [gyema-contracts](https://github.com/tsotsoobi/gyema-contracts) — Soroban smart contracts for V2 escrow
+- [gyema-contracts](https://github.com/tsotsoobi/gyema-contracts) — Soroban escrow contracts (V2)
 - [Pi Logistics Ltd.](https://pillgh.com) — the company behind Gyema
+
+---
+
+## License
+
+Copyright © 2026 Pi Logistics Ltd. All rights reserved.
