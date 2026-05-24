@@ -1,6 +1,6 @@
 # Gyema
 
-**Peer-to-peer delivery on Pi Network, built for Ghana and pan-African expansion.**
+**Peer-to-peer delivery on Pi Network, built in Ghana for the world.**
 
 Gyema connects two sides of every delivery: **Senders** with packages to move, and **Travellers** already making the trip. Pi is the payment rail. The platform runs on Pi Testnet today and is built to migrate to Mainnet once Pi Core Team enables Soroban deployment for third-party apps.
 
