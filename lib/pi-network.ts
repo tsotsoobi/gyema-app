@@ -222,6 +222,92 @@ export const signInAndPersist = async (): Promise<PiUser> => {
   return user
 }
 
+/**
+ * Silent session restore for cold app mount.
+ *
+ * When a user returns to the app via a fresh tab (cold Pi Ecosystem entry),
+ * localStorage has their PiUser but inMemorySession is null — meaning the
+ * app thinks they're signed in but has no Supabase session to authenticate
+ * backend requests. POSTs fail with generic network errors.
+ *
+ * This function fixes that by exchanging the stored Pi accessToken for a
+ * fresh Supabase session via /api/auth/verify. The verify route is
+ * idempotent: for existing pioneers it just returns their session; for
+ * users whose Pi token has expired it returns 401, signalling we need a
+ * fresh Pi.authenticate().
+ *
+ * Returns the fully-hydrated PiUser on success (with Supabase session
+ * populated in-memory), or null if restore failed. Callers should treat
+ * null as "stored session is no longer valid" and decide whether to clear
+ * localStorage or prompt a fresh sign-in.
+ */
+export const restoreSessionFromStorage = async (): Promise<PiUser | null> => {
+  const stored = getStoredUser()
+  if (!stored) return null
+
+  // Guest sessions don't need verify — they're local-only.
+  if (isGuest(stored)) return stored
+
+  // Real Pioneer session — exchange the stored Pi accessToken for a
+  // fresh Supabase session.
+  if (!stored.accessToken) {
+    console.warn("[pi-network] Stored user has no accessToken, cannot restore")
+    return null
+  }
+
+  try {
+    const response = await fetch("/api/auth/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accessToken: stored.accessToken }),
+    })
+
+    const body = (await response.json()) as {
+      ok: boolean
+      pioneer?: {
+        pi_uid: string
+        pi_username: string
+        supabase_user_id: string
+      }
+      session?: {
+        access_token: string
+        refresh_token: string
+      }
+      reason?: string
+    }
+
+    if (!body.ok || !body.session || !body.pioneer) {
+      console.warn("[pi-network] Session restore rejected:", body.reason)
+      return null
+    }
+
+    // Restore in-memory Supabase session.
+    setSupabaseSession({
+      accessToken: body.session.access_token,
+      refreshToken: body.session.refresh_token,
+    })
+
+    // Return the canonical user shape, matching signInWithPi.
+    const restored: PiUser = {
+      uid: body.pioneer.pi_uid,
+      username: body.pioneer.pi_username,
+      accessToken: stored.accessToken,
+      supabaseAccessToken: body.session.access_token,
+      supabaseRefreshToken: body.session.refresh_token,
+      supabaseUserId: body.pioneer.supabase_user_id,
+    }
+
+    // Persist the canonical user back to localStorage (the canonical
+    // pi_uid may differ from what was stored if rotation happened).
+    setStoredUser(restored)
+
+    return restored
+  } catch (error) {
+    console.error("[pi-network] Session restore network error:", error)
+    return null
+  }
+}
+
 // In-memory Supabase session storage.
 //
 // Deliberately NOT in localStorage — leaked tokens could be read by any
