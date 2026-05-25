@@ -13,6 +13,8 @@ import {
   clearStoredAuth,
   getStoredRole,
   getStoredUser,
+  isGuest,
+  restoreSessionFromStorage,
   setStoredRole,
   setStoredUser,
   type PiUser,
@@ -28,11 +30,47 @@ export default function Gyema() {
   const [showWelcome, setShowWelcome] = useState(false)
 
   useEffect(() => {
-    const storedUser = getStoredUser()
     const storedRole = getStoredRole()
-    if (storedUser) setUser(storedUser)
     if (storedRole) setRole(storedRole)
-    setHydrated(true)
+
+    // Cold-mount session restore: if there's a stored user, verify their
+    // session is still good before trusting it. Guests pass through
+    // immediately; Pioneers get their Supabase session refreshed via
+    // /api/auth/verify so backend POSTs (listings, trips, payments) work
+    // on fresh tabs. Without this, returning Pioneers see "Could not
+    // post your delivery" on cold Pi Ecosystem entry until they sign
+    // out and back in.
+    let cancelled = false
+    ;(async () => {
+      const stored = getStoredUser()
+      if (!stored) {
+        if (!cancelled) setHydrated(true)
+        return
+      }
+
+      if (isGuest(stored)) {
+        if (!cancelled) {
+          setUser(stored)
+          setHydrated(true)
+        }
+        return
+      }
+
+      const restored = await restoreSessionFromStorage()
+      if (cancelled) return
+
+      if (restored) {
+        setUser(restored)
+      } else {
+        // Stored session is no longer valid — clear it and show SignIn.
+        clearStoredAuth()
+      }
+      setHydrated(true)
+    })()
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
