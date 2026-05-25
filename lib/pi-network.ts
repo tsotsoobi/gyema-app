@@ -236,6 +236,13 @@ export const signInAndPersist = async (): Promise<PiUser> => {
  * users whose Pi token has expired it returns 401, signalling we need a
  * fresh Pi.authenticate().
  *
+ * SAFETY: The fetch is wrapped in a 5-second AbortController timeout.
+ * Without this, a hung verify call (e.g. preview deployment missing env
+ * vars, Pi Platform slow response, or network blip) would leave the
+ * mount effect awaiting forever and the spinner showing forever. With
+ * the timeout, worst case is "restore aborts after 5s, user sees SignIn
+ * screen" — the same UX as a token-expired flow.
+ *
  * Returns the fully-hydrated PiUser on success (with Supabase session
  * populated in-memory), or null if restore failed. Callers should treat
  * null as "stored session is no longer valid" and decide whether to clear
@@ -255,12 +262,23 @@ export const restoreSessionFromStorage = async (): Promise<PiUser | null> => {
     return null
   }
 
+  // 5-second timeout via AbortController. Caps the worst-case spinner
+  // delay on cold mount when verify hangs (e.g. env misconfig on a
+  // preview deployment, Pi Platform slow response, transient network
+  // blip). Without this, the await would sit forever and the spinner
+  // would never resolve. With the timeout, worst case is "restore
+  // aborts after 5s, user sees SignIn screen."
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 5000)
+
   try {
     const response = await fetch("/api/auth/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ accessToken: stored.accessToken }),
+      signal: controller.signal,
     })
+    clearTimeout(timeoutId)
 
     const body = (await response.json()) as {
       ok: boolean
@@ -303,7 +321,12 @@ export const restoreSessionFromStorage = async (): Promise<PiUser | null> => {
 
     return restored
   } catch (error) {
-    console.error("[pi-network] Session restore network error:", error)
+    clearTimeout(timeoutId)
+    if (error instanceof Error && error.name === "AbortError") {
+      console.warn("[pi-network] Session restore timed out after 5s")
+    } else {
+      console.error("[pi-network] Session restore network error:", error)
+    }
     return null
   }
 }
