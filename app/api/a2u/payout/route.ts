@@ -344,7 +344,7 @@ export async function POST(req: NextRequest) {
 
   let pi: PiNetwork
   try {
-    pi = new PiNetwork(piApiKey, walletSeed)
+    pi = new PiNetwork(piApiKey, walletSeed, { baseUrl: "https://api.testnet.minepi.com" })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     await markFailed(admin, reward_ref, "create", `SDK init failed: ${msg}`)
