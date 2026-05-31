@@ -18,6 +18,7 @@ const PI_PLATFORM_BASE_URL = "https://api.minepi.com"
 export type PiPlatformUser = {
   uid: string
   username: string
+  credentials?: { scopes?: string[]; valid_until?: { timestamp: number; iso8601: string } }
   // Note: Pi Platform's /me does not currently return KYC status or
   // mainnet migration status as separate fields. KYC enforcement is
   // handled by Pi Browser refusing to authenticate non-KYC'd accounts.
@@ -74,6 +75,7 @@ export async function verifyPiAccessToken(
     }
 
     const user = (await response.json()) as PiPlatformUser
+    console.log("[pi-platform] /v2/me granted scopes:", JSON.stringify((user as any).credentials?.scopes ?? "none"))
 
     // Defensive: confirm we got the fields we need.
     if (!user.uid || !user.username) {
@@ -87,3 +89,7 @@ export async function verifyPiAccessToken(
     return null
   }
 }
+
+
+
+
