@@ -361,8 +361,36 @@ export async function POST(req: NextRequest) {
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    console.error("[a2u/payout] createPayment failed", { reward_ref, error: msg })
-    await markFailed(admin, reward_ref, "create", `createPayment: ${msg}`)
+    // pi-backend's createPayment has no internal try/catch, so the raw
+    // axios error reaches here intact. e.message is only "Request failed
+    // with status code 404"; the real cause is in the response body and
+    // the called URL. Surface both into the log and the audit row.
+    const anyErr = e as {
+      response?: { status?: number; data?: unknown }
+      config?: { method?: string; url?: string; baseURL?: string }
+    }
+    const status = anyErr?.response?.status
+    const rawBody = anyErr?.response?.data
+    const rawBodyStr =
+      typeof rawBody === "string" ? rawBody : JSON.stringify(rawBody)
+    const calledUrl = anyErr?.config
+      ? `${anyErr.config.baseURL ?? ""}${anyErr.config.url ?? ""}`
+      : undefined
+    const calledMethod = anyErr?.config?.method
+    console.error("[a2u/payout] createPayment failed", {
+      reward_ref,
+      message: msg,
+      status,
+      calledMethod,
+      calledUrl,
+      rawBody: rawBodyStr,
+    })
+    await markFailed(
+      admin,
+      reward_ref,
+      "create",
+      `createPayment ${status ?? "?"} ${calledMethod ?? ""} ${calledUrl ?? ""} :: ${rawBodyStr ?? msg}`
+    )
     return jsonError("CREATE_FAILED", `Pi createPayment failed: ${msg}`, "create", 502, reward_ref)
   }
 
@@ -561,4 +589,3 @@ export async function GET() {
     { status: 405 }
   )
 }
-
