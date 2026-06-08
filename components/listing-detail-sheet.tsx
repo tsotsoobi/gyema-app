@@ -141,7 +141,7 @@ export function ListingDetailSheet({
   // the ?listing handler in app/page.tsx. Set PI_APP_HOST to whatever host
   // the app resolves at inside Pi Browser. Switch it to "gyema.pi" once that
   // domain claim finalizes; until then use the live PiNet subdomain host.
-  const PI_APP_HOST = "gyema-app.vercel.app"
+  const PI_APP_HOST = "gyema3681.pinet.com"
   const shareUrl = `https://${PI_APP_HOST}/?listing=${listing.trackingId}`
   const shareText = `${listing.fromCity} → ${listing.toCity} on Gyema (${price} π). Open in Pi Browser to accept:`
   const shareXHref = `https://twitter.com/intent/tweet?text=${encodeURIComponent(
