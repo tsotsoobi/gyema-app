@@ -26,7 +26,7 @@ import { createU2APayment, signInAndPersist, type PiUser } from "@/lib/pi-networ
 // table. See the WhatsApp prompt in the Accept flow below.
 const WHATSAPP_STORAGE_KEY = "gyema_whatsapp"
 
-// Flat connection fee (in Ï€) charged via U2A when a Pioneer accepts a
+// Flat connection fee (in π) charged via U2A when a Pioneer accepts a
 // listing. Paying it unlocks the counterparty's contact. This is Gyema's
 // Option A revenue: the sender pays the traveller directly, peer-to-peer,
 // and Gyema charges this flat fee for making the match.
@@ -116,7 +116,7 @@ export function ListingDetailSheet({
         setSavedWhatsapp(stored.trim())
       }
     } catch {
-      // localStorage can throw in private modes / restricted contexts â€”
+      // localStorage can throw in private modes / restricted contexts —
       // fail silently and the user will just be prompted again next time.
     }
   }, [])
@@ -143,7 +143,7 @@ export function ListingDetailSheet({
   // domain claim finalizes; until then use the live PiNet subdomain host.
   const PI_APP_HOST = "gyema-app.vercel.app"
   const shareUrl = `https://${PI_APP_HOST}/?listing=${listing.trackingId}`
-  const shareText = `${listing.fromCity} â†’ ${listing.toCity} on Gyema (${price} Ï€). Open in Pi Browser to accept:`
+  const shareText = `${listing.fromCity} → ${listing.toCity} on Gyema (${price} π). Open in Pi Browser to accept:`
   const shareXHref = `https://twitter.com/intent/tweet?text=${encodeURIComponent(
     `${shareText} ${shareUrl}`,
   )}`
@@ -192,13 +192,13 @@ export function ListingDetailSheet({
 
   const piChatHref = "https://chat.pinet.com/conversation-requests"
 
-  // Guest detection â€” guests are blocked from all write actions
+  // Guest detection — guests are blocked from all write actions
   // (Accept, Mark Complete, Cancel match) since these mutations require
   // a verifiable Pi identity. A guest will see <GuestActionGate> instead.
   //
   // Inlined here rather than imported from pi-network because the sheet
   // receives a structurally-typed currentUser (uid, username, whatsapp?),
-  // not a full PiUser â€” but the uid check is identical.
+  // not a full PiUser — but the uid check is identical.
   const viewerIsGuest = currentUser.uid.startsWith("guest-")
 
   const handleAccept = async () => {
@@ -214,7 +214,7 @@ export function ListingDetailSheet({
       return
     }
 
-    // Loose validation â€” at least 9 digits somewhere in the string. Strict
+    // Loose validation — at least 9 digits somewhere in the string. Strict
     // formatting (Ghana +233 prefix etc) is V2 polish.
     const digitsOnly = numberToUse.replace(/\D/g, "")
     if (digitsOnly.length < 9) {
@@ -234,7 +234,7 @@ export function ListingDetailSheet({
         window.localStorage.setItem(WHATSAPP_STORAGE_KEY, inlineNumber)
         setSavedWhatsapp(inlineNumber)
       } catch {
-        // If we can't persist, still proceed with the Accept â€” the user
+        // If we can't persist, still proceed with the Accept — the user
         // will just be re-prompted next time, which is annoying but not broken.
       }
     }
@@ -272,7 +272,7 @@ export function ListingDetailSheet({
     try {
       await createU2APayment({
         amount: CONNECTION_FEE_PI,
-        memo: `Gyema connection fee Â· ${listing.trackingId}`,
+        memo: `Gyema connection fee · ${listing.trackingId}`,
         metadata: {
           type: "connection_fee",
           app: "gyema",
@@ -324,7 +324,7 @@ export function ListingDetailSheet({
     }
   }
 
-  // Cancel a matched listing. Either party can call this. Destructive â€”
+  // Cancel a matched listing. Either party can call this. Destructive —
   // listing transitions to 'expired' and falls into Past Trips/Deliveries.
   // Confirmation prompt before calling so it's never a one-tap mistake.
   const handleCancelMatch = async () => {
@@ -409,7 +409,7 @@ export function ListingDetailSheet({
             </span>
           </div>
           <SheetTitle className="text-xl">
-            {listing.fromCity} â†’ {listing.toCity}
+            {listing.fromCity} → {listing.toCity}
           </SheetTitle>
         </SheetHeader>
 
@@ -456,15 +456,15 @@ export function ListingDetailSheet({
           <div className="flex items-center justify-between border-t pt-4">
             <div>
               <p className="text-xs text-muted-foreground">Price</p>
-              <p className="text-2xl font-bold text-primary">{price} Ï€</p>
+              <p className="text-2xl font-bold text-primary">{price} π</p>
             </div>
             <p className="text-[11px] text-muted-foreground text-right max-w-[55%]">
-              Coordinate payment off-platform Â· Pi Escrow coming in v2
+              Coordinate payment off-platform · Pi Escrow coming in v2
             </p>
           </div>
 
           {/* Coordinate section: contact details for the two matched parties.
-              Outsiders no longer see this on open listings â€” contact is now a
+              Outsiders no longer see this on open listings — contact is now a
               paid unlock gated behind the connection fee in handleAccept. */}
           {(role === "sender" || role === "traveller") &&
             listing.status !== "completed" &&
@@ -485,7 +485,7 @@ export function ListingDetailSheet({
                         variant="outline"
                         className="w-full h-11 text-sm font-semibold"
                       >
-                        ðŸ’¬ WhatsApp
+                        💬 WhatsApp
                       </Button>
                     </a>
                   ) : (
@@ -494,7 +494,7 @@ export function ListingDetailSheet({
                       className="w-full h-11 text-sm font-semibold"
                       disabled
                     >
-                      ðŸ’¬ WhatsApp
+                      💬 WhatsApp
                     </Button>
                   )}
                   <a
@@ -507,7 +507,7 @@ export function ListingDetailSheet({
                       variant="outline"
                       className="w-full h-11 text-sm font-semibold"
                     >
-                      Ï€ Chat in Pi
+                      π Chat in Pi
                     </Button>
                   </a>
                 </div>
@@ -528,12 +528,12 @@ export function ListingDetailSheet({
               </p>
               <div className="rounded-lg border border-dashed border-primary/40 bg-primary/5 p-3">
                 <p className="text-sm font-medium">
-                  ðŸ”’ Contact unlocks when you accept
+                  🔒 Contact unlocks when you accept
                 </p>
                 <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
                   Accept to unlock @{listing.postedByUsername}'s contact, then
                   arrange the delivery and settle payment directly, peer to peer.
-                  A flat {CONNECTION_FEE_PI} Ï€ fee applies.
+                  A flat {CONNECTION_FEE_PI} π fee applies.
                 </p>
               </div>
             </div>
@@ -559,7 +559,7 @@ export function ListingDetailSheet({
                     variant="outline"
                     className="w-full h-11 text-xs font-semibold px-1"
                   >
-                    ð• Post
+                    𝕏 Post
                   </Button>
                 </a>
                 <a
@@ -572,7 +572,7 @@ export function ListingDetailSheet({
                     variant="outline"
                     className="w-full h-11 text-xs font-semibold px-1"
                   >
-                    ðŸ’¬ WhatsApp
+                    💬 WhatsApp
                   </Button>
                 </a>
                 <Button
@@ -580,7 +580,7 @@ export function ListingDetailSheet({
                   className="w-full h-11 text-xs font-semibold px-1"
                   onClick={handleCopyShareLink}
                 >
-                  {shareCopied ? "âœ“ Copied" : "ðŸ”— Copy"}
+                  {shareCopied ? "✓ Copied" : "🔗 Copy"}
                 </Button>
               </div>
               <p className="text-[11px] text-muted-foreground leading-relaxed">
@@ -590,7 +590,7 @@ export function ListingDetailSheet({
             </div>
           )}
 
-          {/* Primary action area â€” depends on viewer role and listing state */}
+          {/* Primary action area — depends on viewer role and listing state */}
           <div className="pt-1 space-y-2">
             {/* Guest viewing an open listing: gate the Accept action. */}
             {viewerIsGuest && role === "outsider" && listing.status === "open" && (
@@ -618,7 +618,7 @@ export function ListingDetailSheet({
                       className="bg-white"
                     />
                     <p className="text-[11px] text-muted-foreground">
-                      Saved on this device â€” you won't have to enter it again.
+                      Saved on this device — you won't have to enter it again.
                     </p>
                   </div>
                 )}
@@ -630,7 +630,7 @@ export function ListingDetailSheet({
                   {acceptPending ? "Accepting..." : "Accept this delivery"}
                 </Button>
                 <p className="text-[11px] text-muted-foreground text-center leading-relaxed">
-                  A flat {CONNECTION_FEE_PI} Ï€ fee unlocks{" "}
+                  A flat {CONNECTION_FEE_PI} π fee unlocks{" "}
                   @{listing.postedByUsername}'s contact. You then settle the
                   delivery and payment with them directly via WhatsApp or Pi Chat.
                 </p>
@@ -645,8 +645,8 @@ export function ListingDetailSheet({
             )}
 
             {/* Party-only actions (Mark Complete, Cancel match). Guests
-                shouldn't reach these in practice â€” they can't be a party
-                to a matched listing â€” but we gate defensively in case a
+                shouldn't reach these in practice — they can't be a party
+                to a matched listing — but we gate defensively in case a
                 historical guest listing is being viewed by a guest session. */}
             {viewerIsGuest &&
               (role === "sender" || role === "traveller") &&
@@ -666,11 +666,11 @@ export function ListingDetailSheet({
                   <div className="rounded-lg bg-muted/40 p-3 space-y-1">
                     <p className="text-xs font-semibold">Confirmation status</p>
                     <p className="text-xs text-muted-foreground">
-                      Sender: {listing.senderConfirmed ? "âœ“ confirmed" : "â€”"}
+                      Sender: {listing.senderConfirmed ? "✓ confirmed" : "—"}
                     </p>
                     <p className="text-xs text-muted-foreground">
                       Traveller:{" "}
-                      {listing.travellerConfirmed ? "âœ“ confirmed" : "â€”"}
+                      {listing.travellerConfirmed ? "✓ confirmed" : "—"}
                     </p>
                   </div>
                   <Button
@@ -679,7 +679,7 @@ export function ListingDetailSheet({
                     disabled={confirmPending || viewerHasConfirmed}
                   >
                     {viewerHasConfirmed
-                      ? "You've confirmed â€” waiting on the other party"
+                      ? "You've confirmed — waiting on the other party"
                       : confirmPending
                         ? "Confirming..."
                         : `Mark as completed (as ${role})`}
@@ -689,7 +689,7 @@ export function ListingDetailSheet({
                     completed.
                   </p>
 
-                  {/* V1.1.5 â€” Cancel match. Either party can pull the plug if
+                  {/* V1.1.5 — Cancel match. Either party can pull the plug if
                       the deal fell through or the date passed without
                       completion. Destructive: confirms first, then expires. */}
                   <Button
@@ -705,7 +705,7 @@ export function ListingDetailSheet({
 
             {listing.status === "completed" && (
               <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-4 space-y-1 text-center">
-                <div className="text-2xl">âœ…</div>
+                <div className="text-2xl">✅</div>
                 <p className="text-sm font-semibold text-emerald-900">
                   Delivery completed
                 </p>
@@ -744,7 +744,7 @@ export function ListingDetailSheet({
 // GuestPostGate in home-tab.tsx for consistent UX language across surfaces.
 //
 // If onSignedIn isn't wired by the parent (legacy callers), the button
-// is hidden â€” guests still see the explanatory message and can dismiss
+// is hidden — guests still see the explanatory message and can dismiss
 // the sheet. This keeps the component backward-compatible.
 function GuestActionGate({
   headline,
@@ -795,7 +795,7 @@ function GuestActionGate({
           onClick={handleSignIn}
           disabled={loading}
         >
-          {loading ? "Signing inâ€¦" : "Sign in with Pi"}
+          {loading ? "Signing in…" : "Sign in with Pi"}
         </Button>
       )}
 
@@ -808,7 +808,7 @@ function GuestActionGate({
 }
 
 function formatDate(iso: string): string {
-  if (!iso) return "â€”"
+  if (!iso) return "—"
   try {
     return new Date(iso).toLocaleDateString(undefined, {
       month: "long",
