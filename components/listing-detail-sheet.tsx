@@ -15,15 +15,22 @@ import { Badge } from "@/components/ui/badge"
 import type { Listing } from "@/lib/listings"
 import {
   acceptListingAsync,
+  releaseListingAsync,
   cancelMatchedListingAsync,
   confirmCompletionAsync,
 } from "@/lib/listings-async"
-import { signInAndPersist, type PiUser } from "@/lib/pi-network"
+import { createU2APayment, signInAndPersist, type PiUser } from "@/lib/pi-network"
 
 // localStorage key used to persist the user's WhatsApp number across sessions.
 // V1.1 keeps this device-local; V2 moves it server-side once we have a profiles
 // table. See the WhatsApp prompt in the Accept flow below.
 const WHATSAPP_STORAGE_KEY = "gyema_whatsapp"
+
+// Flat connection fee (in Ï€) charged via U2A when a Pioneer accepts a
+// listing. Paying it unlocks the counterparty's contact. This is Gyema's
+// Option A revenue: the sender pays the traveller directly, peer-to-peer,
+// and Gyema charges this flat fee for making the match.
+const CONNECTION_FEE_PI = 1
 
 // The viewer's role with respect to this listing.
 // - "sender" or "traveller": viewer is a party to the delivery (poster or matched)
@@ -89,6 +96,7 @@ export function ListingDetailSheet({
   const [confirmPending, setConfirmPending] = useState(false)
   const [cancelPending, setCancelPending] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [shareCopied, setShareCopied] = useState(false)
 
   // Persisted WhatsApp number, loaded from localStorage on mount.
   // Falls back to whatever the parent passed in via currentUser.whatsapp
@@ -108,7 +116,7 @@ export function ListingDetailSheet({
         setSavedWhatsapp(stored.trim())
       }
     } catch {
-      // localStorage can throw in private modes / restricted contexts —
+      // localStorage can throw in private modes / restricted contexts â€”
       // fail silently and the user will just be prompted again next time.
     }
   }, [])
@@ -127,22 +135,53 @@ export function ListingDetailSheet({
   const date =
     listing.kind === "trip" ? listing.travelDate : listing.deliverBy
 
-  // Whose WhatsApp to surface in the Coordinate section.
-  // Open listings: always show the poster's number (no one else exists yet).
-  // Matched listings: show the OTHER party's number to whoever is viewing.
-  const otherPartyWhatsapp =
-    role === "sender"
-      ? listing.matchedWithWhatsapp ?? listing.whatsapp
-      : role === "traveller"
-        ? listing.whatsapp
-        : listing.whatsapp
+  // --- Share (open listings) --------------------------------------------
+  // A shareable deep link to this listing. Uses Pi's pi:// scheme so a
+  // tapped link opens directly in Pi Browser and lands on the listing via
+  // the ?listing handler in app/page.tsx. Set PI_APP_HOST to whatever host
+  // the app resolves at inside Pi Browser. Switch it to "gyema.pi" once that
+  // domain claim finalizes; until then use the live PiNet subdomain host.
+  const PI_APP_HOST = "gyema-app.vercel.app"
+  const shareUrl = `https://${PI_APP_HOST}/?listing=${listing.trackingId}`
+  const shareText = `${listing.fromCity} â†’ ${listing.toCity} on Gyema (${price} Ï€). Open in Pi Browser to accept:`
+  const shareXHref = `https://twitter.com/intent/tweet?text=${encodeURIComponent(
+    `${shareText} ${shareUrl}`,
+  )}`
+  const shareWhatsappHref = `https://wa.me/?text=${encodeURIComponent(
+    `${shareText} ${shareUrl}`,
+  )}`
 
-  const otherPartyUsername =
-    role === "sender"
-      ? listing.matchedWithUsername ?? listing.postedByUsername
-      : role === "traveller"
-        ? listing.postedByUsername
-        : listing.postedByUsername
+  const handleCopyShareLink = async () => {
+    const payload = `${shareText} ${shareUrl}`
+    try {
+      await navigator.clipboard.writeText(payload)
+      setShareCopied(true)
+      setTimeout(() => setShareCopied(false), 2000)
+    } catch {
+      // Clipboard API can be blocked in some webviews; fall back to a
+      // manual copy prompt so the link is still reachable.
+      window.prompt("Copy this link", payload)
+    }
+  }
+
+  // Whose contact to surface in the Coordinate section. The rule is simply
+  // "show the other person", so it keys on poster-vs-matched IDENTITY, not
+  // the sender/traveller delivery role (which is independent of who posted
+  // and was the source of the earlier bug where a viewer saw their own
+  // number):
+  //   - viewer is the POSTER   -> show the matched accepter's contact
+  //   - viewer is the ACCEPTER -> show the poster's contact
+  // For open listings the contact stays locked, so these only surface once
+  // the listing is matched and the viewer is one of the two parties.
+  const viewerIsPoster = listing.postedById === currentUser.uid
+
+  const otherPartyWhatsapp = viewerIsPoster
+    ? listing.matchedWithWhatsapp
+    : listing.whatsapp
+
+  const otherPartyUsername = viewerIsPoster
+    ? listing.matchedWithUsername
+    : listing.postedByUsername
 
   const whatsappDigits = (otherPartyWhatsapp ?? "").replace(/\D/g, "")
   const whatsappHref = whatsappDigits
@@ -153,13 +192,13 @@ export function ListingDetailSheet({
 
   const piChatHref = "https://chat.pinet.com/conversation-requests"
 
-  // Guest detection — guests are blocked from all write actions
+  // Guest detection â€” guests are blocked from all write actions
   // (Accept, Mark Complete, Cancel match) since these mutations require
   // a verifiable Pi identity. A guest will see <GuestActionGate> instead.
   //
   // Inlined here rather than imported from pi-network because the sheet
   // receives a structurally-typed currentUser (uid, username, whatsapp?),
-  // not a full PiUser — but the uid check is identical.
+  // not a full PiUser â€” but the uid check is identical.
   const viewerIsGuest = currentUser.uid.startsWith("guest-")
 
   const handleAccept = async () => {
@@ -175,7 +214,7 @@ export function ListingDetailSheet({
       return
     }
 
-    // Loose validation — at least 9 digits somewhere in the string. Strict
+    // Loose validation â€” at least 9 digits somewhere in the string. Strict
     // formatting (Ghana +233 prefix etc) is V2 polish.
     const digitsOnly = numberToUse.replace(/\D/g, "")
     if (digitsOnly.length < 9) {
@@ -195,33 +234,70 @@ export function ListingDetailSheet({
         window.localStorage.setItem(WHATSAPP_STORAGE_KEY, inlineNumber)
         setSavedWhatsapp(inlineNumber)
       } catch {
-        // If we can't persist, still proceed with the Accept — the user
+        // If we can't persist, still proceed with the Accept â€” the user
         // will just be re-prompted next time, which is annoying but not broken.
       }
     }
 
+    // 1) Claim the listing FIRST, server-side and authoritative. The accept
+    //    route uses the service_role client, so it bypasses the listings RLS
+    //    UPDATE policy, which can never authorize the initial claim (at accept
+    //    time the accepter is neither the poster nor yet a matched party, so a
+    //    client-side update touches 0 rows). We do NOT charge yet: if the
+    //    listing is already taken or not open, we stop here with no payment.
+    let claimed: Listing | null = null
     try {
-      const updated = await acceptListingAsync({
+      claimed = await acceptListingAsync({
         listingId: listing.id,
-        accepterUserId: currentUser.uid,
-        accepterUsername: currentUser.username,
         accepterWhatsapp: numberToUse,
       })
-      if (!updated) {
-        setActionError(
-          "This listing is no longer available. Someone may have just accepted it.",
-        )
-        setAcceptPending(false)
-        return
-      }
-      setListing(updated)
-      onListingUpdated?.(updated)
     } catch (err) {
-      console.error("[gyema] handleAccept error:", err)
+      console.error("[gyema] claim error:", err)
       setActionError("Could not accept this listing. Please try again.")
-    } finally {
       setAcceptPending(false)
+      return
     }
+    if (!claimed) {
+      setActionError(
+        "This listing is no longer available. Someone may have just accepted it.",
+      )
+      setAcceptPending(false)
+      return
+    }
+
+    // 2) Connection fee (U2A). The claim is now held in the Pioneer's name.
+    //    Charge the fee; if the Pioneer cancels the Pi dialog or the payment
+    //    fails, RELEASE the claim so the listing reopens and nobody is charged
+    //    for a match that didn't complete.
+    try {
+      await createU2APayment({
+        amount: CONNECTION_FEE_PI,
+        memo: `Gyema connection fee Â· ${listing.trackingId}`,
+        metadata: {
+          type: "connection_fee",
+          app: "gyema",
+          listingId: listing.id,
+          trackingId: listing.trackingId,
+        },
+      })
+    } catch (err) {
+      console.error("[gyema] connection fee payment failed:", err)
+      // Roll the claim back so the listing returns to open.
+      await releaseListingAsync({ listingId: listing.id })
+      const msg = err instanceof Error ? err.message : "Payment failed."
+      setActionError(
+        msg === "Payment cancelled."
+          ? "Payment cancelled, so the match wasn't completed and the listing is open again. You can accept when you're ready to pay the connection fee."
+          : `Payment could not be completed: ${msg}. The listing has been released.`,
+      )
+      setAcceptPending(false)
+      return
+    }
+
+    // 3) Paid and matched. Reflect the matched listing (contact now unlocks).
+    setListing(claimed)
+    onListingUpdated?.(claimed)
+    setAcceptPending(false)
   }
 
   const handleConfirmCompletion = async () => {
@@ -248,7 +324,7 @@ export function ListingDetailSheet({
     }
   }
 
-  // Cancel a matched listing. Either party can call this. Destructive —
+  // Cancel a matched listing. Either party can call this. Destructive â€”
   // listing transitions to 'expired' and falls into Past Trips/Deliveries.
   // Confirmation prompt before calling so it's never a one-tap mistake.
   const handleCancelMatch = async () => {
@@ -333,7 +409,7 @@ export function ListingDetailSheet({
             </span>
           </div>
           <SheetTitle className="text-xl">
-            {listing.fromCity} → {listing.toCity}
+            {listing.fromCity} â†’ {listing.toCity}
           </SheetTitle>
         </SheetHeader>
 
@@ -380,19 +456,17 @@ export function ListingDetailSheet({
           <div className="flex items-center justify-between border-t pt-4">
             <div>
               <p className="text-xs text-muted-foreground">Price</p>
-              <p className="text-2xl font-bold text-primary">{price} π</p>
+              <p className="text-2xl font-bold text-primary">{price} Ï€</p>
             </div>
             <p className="text-[11px] text-muted-foreground text-right max-w-[55%]">
-              Coordinate payment off-platform · Pi Escrow coming in v2
+              Coordinate payment off-platform Â· Pi Escrow coming in v2
             </p>
           </div>
 
-          {/* Coordinate section: only meaningful once parties exist (matched onward).
-              For open listings shown to outsiders, we still surface the poster's
-              contact since that's how they currently make a deal pre-Accept. */}
-          {(role === "sender" ||
-            role === "traveller" ||
-            role === "outsider") &&
+          {/* Coordinate section: contact details for the two matched parties.
+              Outsiders no longer see this on open listings â€” contact is now a
+              paid unlock gated behind the connection fee in handleAccept. */}
+          {(role === "sender" || role === "traveller") &&
             listing.status !== "completed" &&
             listing.status !== "expired" && (
               <div className="space-y-2 pt-1">
@@ -411,7 +485,7 @@ export function ListingDetailSheet({
                         variant="outline"
                         className="w-full h-11 text-sm font-semibold"
                       >
-                        💬 WhatsApp
+                        ðŸ’¬ WhatsApp
                       </Button>
                     </a>
                   ) : (
@@ -420,7 +494,7 @@ export function ListingDetailSheet({
                       className="w-full h-11 text-sm font-semibold"
                       disabled
                     >
-                      💬 WhatsApp
+                      ðŸ’¬ WhatsApp
                     </Button>
                   )}
                   <a
@@ -433,7 +507,7 @@ export function ListingDetailSheet({
                       variant="outline"
                       className="w-full h-11 text-sm font-semibold"
                     >
-                      π Chat in Pi
+                      Ï€ Chat in Pi
                     </Button>
                   </a>
                 </div>
@@ -445,7 +519,78 @@ export function ListingDetailSheet({
               </div>
             )}
 
-          {/* Primary action area — depends on viewer role and listing state */}
+          {/* Outsiders on open listings: contact is locked until they accept
+              and pay the connection fee. */}
+          {role === "outsider" && listing.status === "open" && (
+            <div className="space-y-2 pt-1">
+              <p className="text-xs text-muted-foreground uppercase tracking-wide">
+                Coordinate
+              </p>
+              <div className="rounded-lg border border-dashed border-primary/40 bg-primary/5 p-3">
+                <p className="text-sm font-medium">
+                  ðŸ”’ Contact unlocks when you accept
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+                  Accept to unlock @{listing.postedByUsername}'s contact, then
+                  arrange the delivery and settle payment directly, peer to peer.
+                  A flat {CONNECTION_FEE_PI} Ï€ fee applies.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Share. Only useful while the listing is still open and looking
+              for a counterparty. X and WhatsApp prefill the link; Instagram
+              has no link-share intent, so Copy lets the user paste it into a
+              story, bio, or DM. */}
+          {listing.status === "open" && (
+            <div className="space-y-2 pt-1">
+              <p className="text-xs text-muted-foreground uppercase tracking-wide">
+                Share
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                <a
+                  href={shareXHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block"
+                >
+                  <Button
+                    variant="outline"
+                    className="w-full h-11 text-xs font-semibold px-1"
+                  >
+                    ð• Post
+                  </Button>
+                </a>
+                <a
+                  href={shareWhatsappHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block"
+                >
+                  <Button
+                    variant="outline"
+                    className="w-full h-11 text-xs font-semibold px-1"
+                  >
+                    ðŸ’¬ WhatsApp
+                  </Button>
+                </a>
+                <Button
+                  variant="outline"
+                  className="w-full h-11 text-xs font-semibold px-1"
+                  onClick={handleCopyShareLink}
+                >
+                  {shareCopied ? "âœ“ Copied" : "ðŸ”— Copy"}
+                </Button>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                Copy the link to paste into your Instagram story, bio, or DM.
+                Shared links open this listing in Pi Browser.
+              </p>
+            </div>
+          )}
+
+          {/* Primary action area â€” depends on viewer role and listing state */}
           <div className="pt-1 space-y-2">
             {/* Guest viewing an open listing: gate the Accept action. */}
             {viewerIsGuest && role === "outsider" && listing.status === "open" && (
@@ -473,7 +618,7 @@ export function ListingDetailSheet({
                       className="bg-white"
                     />
                     <p className="text-[11px] text-muted-foreground">
-                      Saved on this device — you won't have to enter it again.
+                      Saved on this device â€” you won't have to enter it again.
                     </p>
                   </div>
                 )}
@@ -485,8 +630,9 @@ export function ListingDetailSheet({
                   {acceptPending ? "Accepting..." : "Accept this delivery"}
                 </Button>
                 <p className="text-[11px] text-muted-foreground text-center leading-relaxed">
-                  By accepting, you agree to coordinate this delivery with{" "}
-                  @{listing.postedByUsername} via WhatsApp or Pi Chat.
+                  A flat {CONNECTION_FEE_PI} Ï€ fee unlocks{" "}
+                  @{listing.postedByUsername}'s contact. You then settle the
+                  delivery and payment with them directly via WhatsApp or Pi Chat.
                 </p>
               </>
             )}
@@ -499,8 +645,8 @@ export function ListingDetailSheet({
             )}
 
             {/* Party-only actions (Mark Complete, Cancel match). Guests
-                shouldn't reach these in practice — they can't be a party
-                to a matched listing — but we gate defensively in case a
+                shouldn't reach these in practice â€” they can't be a party
+                to a matched listing â€” but we gate defensively in case a
                 historical guest listing is being viewed by a guest session. */}
             {viewerIsGuest &&
               (role === "sender" || role === "traveller") &&
@@ -520,11 +666,11 @@ export function ListingDetailSheet({
                   <div className="rounded-lg bg-muted/40 p-3 space-y-1">
                     <p className="text-xs font-semibold">Confirmation status</p>
                     <p className="text-xs text-muted-foreground">
-                      Sender: {listing.senderConfirmed ? "✓ confirmed" : "—"}
+                      Sender: {listing.senderConfirmed ? "âœ“ confirmed" : "â€”"}
                     </p>
                     <p className="text-xs text-muted-foreground">
                       Traveller:{" "}
-                      {listing.travellerConfirmed ? "✓ confirmed" : "—"}
+                      {listing.travellerConfirmed ? "âœ“ confirmed" : "â€”"}
                     </p>
                   </div>
                   <Button
@@ -533,7 +679,7 @@ export function ListingDetailSheet({
                     disabled={confirmPending || viewerHasConfirmed}
                   >
                     {viewerHasConfirmed
-                      ? "You've confirmed — waiting on the other party"
+                      ? "You've confirmed â€” waiting on the other party"
                       : confirmPending
                         ? "Confirming..."
                         : `Mark as completed (as ${role})`}
@@ -543,7 +689,7 @@ export function ListingDetailSheet({
                     completed.
                   </p>
 
-                  {/* V1.1.5 — Cancel match. Either party can pull the plug if
+                  {/* V1.1.5 â€” Cancel match. Either party can pull the plug if
                       the deal fell through or the date passed without
                       completion. Destructive: confirms first, then expires. */}
                   <Button
@@ -559,7 +705,7 @@ export function ListingDetailSheet({
 
             {listing.status === "completed" && (
               <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-4 space-y-1 text-center">
-                <div className="text-2xl">✅</div>
+                <div className="text-2xl">âœ…</div>
                 <p className="text-sm font-semibold text-emerald-900">
                   Delivery completed
                 </p>
@@ -598,7 +744,7 @@ export function ListingDetailSheet({
 // GuestPostGate in home-tab.tsx for consistent UX language across surfaces.
 //
 // If onSignedIn isn't wired by the parent (legacy callers), the button
-// is hidden — guests still see the explanatory message and can dismiss
+// is hidden â€” guests still see the explanatory message and can dismiss
 // the sheet. This keeps the component backward-compatible.
 function GuestActionGate({
   headline,
@@ -649,7 +795,7 @@ function GuestActionGate({
           onClick={handleSignIn}
           disabled={loading}
         >
-          {loading ? "Signing in…" : "Sign in with Pi"}
+          {loading ? "Signing inâ€¦" : "Sign in with Pi"}
         </Button>
       )}
 
@@ -662,7 +808,7 @@ function GuestActionGate({
 }
 
 function formatDate(iso: string): string {
-  if (!iso) return "—"
+  if (!iso) return "â€”"
   try {
     return new Date(iso).toLocaleDateString(undefined, {
       month: "long",

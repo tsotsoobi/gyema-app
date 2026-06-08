@@ -352,27 +352,40 @@ export const getSupabaseSession = () => {
   return inMemorySession
 }
 
-// Create a tiny test payment (0.001 testnet π) to satisfy Pi Develop's
-// "Process a Transaction" checklist item.
+// Generalized user-to-app (U2A) payment. Drives the full Pi payment
+// lifecycle: SDK createPayment -> /api/payments/approve -> SDK completion
+// -> /api/payments/complete. Resolves with { paymentId, txid } after the
+// server confirms completion; rejects on cancel, error, or approval fail.
 //
-// The payment lifecycle requires server-side approval and completion via
-// /api/payments/approve and /api/payments/complete. Without these, Pi
-// times out the payment with "developer failed to approve" error.
-export const createTestPayment = async (): Promise<string> => {
+// This is the exact path the checklist test used, now parameterized so
+// real charges (the service fee) reuse the same proven plumbing.
+export const createU2APayment = async (input: {
+  amount: number
+  memo: string
+  metadata: Record<string, unknown>
+}): Promise<{ paymentId: string; txid: string }> => {
   if (!isPiSdkAvailable()) {
     throw new Error(
-      "Pi SDK not available. Open Gyema inside Pi Browser to test."
+      "Pi SDK not available. Open Gyema inside Pi Browser to pay."
     )
   }
 
+  // Ensure the Pi SDK has a payments-scoped session before creating a payment.
+  // On a restored (cold-mount) session, Pi.authenticate has not run this page
+  // session, so the SDK lacks the "payments" scope and createPayment fails with
+  // "Cannot create a payment without payments scope". authenticateWithPi
+  // requests ["username", "payments"] and is effectively idempotent once the
+  // Pioneer has granted it, so it is safe to call before every payment.
+  await authenticateWithPi()
+
   const Pi = window.Pi!
 
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<{ paymentId: string; txid: string }>((resolve, reject) => {
     Pi.createPayment(
       {
-        amount: 0.001,
-        memo: "Gyema test transaction",
-        metadata: { type: "checklist_test", app: "gyema" },
+        amount: input.amount,
+        memo: input.memo,
+        metadata: input.metadata,
       },
       {
         onReadyForServerApproval: async (paymentId: string) => {
@@ -407,8 +420,7 @@ export const createTestPayment = async (): Promise<string> => {
               reject(new Error("Server completion failed"))
               return
             }
-            // Resolve only after server confirms completion.
-            resolve(paymentId)
+            resolve({ paymentId, txid })
           } catch (err) {
             console.error("[gyema] Complete fetch error:", err)
             reject(err instanceof Error ? err : new Error("Complete fetch failed"))
@@ -423,8 +435,27 @@ export const createTestPayment = async (): Promise<string> => {
           reject(error)
         },
       }
-    ).catch(reject)
+    )
+    // We intentionally do NOT chain .catch on Pi.createPayment. The Pi SDK's
+    // createPayment is callback-driven and does not reliably return a Promise
+    // (it can return undefined, e.g. when an incomplete payment from a prior
+    // attempt exists), so ".catch(reject)" throws "createPayment(...).catch is
+    // not a function". This promise already settles via the onError / onCancel
+    // callbacks above, and a synchronous throw inside the executor is caught by
+    // the Promise constructor, so no trailing .catch is needed.
   })
+}
+
+// Checklist test payment — now a thin wrapper over createU2APayment,
+// preserving the original behavior (0.001 testnet π, checklist metadata)
+// so the debug card on the Profile tab keeps working unchanged.
+export const createTestPayment = async (): Promise<string> => {
+  const { paymentId } = await createU2APayment({
+    amount: 0.001,
+    memo: "Gyema test transaction",
+    metadata: { type: "checklist_test", app: "gyema" },
+  })
+  return paymentId
 }
 
 // Local-storage helpers for role persistence between sessions.
