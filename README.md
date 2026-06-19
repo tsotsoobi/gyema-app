@@ -226,7 +226,18 @@ V2 deployment begins after the gyema.pi domain claim (target December 19, 2026) 
 - **Actively staked:** 57,603.60 Pi in the Pi ecosystem directory (as of June 19, 2026)
 - **First completed delivery:** GYM-719D42, Accra to Tema, 2026-05-07
 
-<!-- Screenshots: add real captures of the Home, Trips, Track, and Profile tabs here. -->
+---
+
+## Screenshots
+
+<p>
+  <img src="docs/screenshots/home.jpg" width="200" alt="Home tab" />
+  <img src="docs/screenshots/my-activity.jpg" width="200" alt="My Activity tab" />
+  <img src="docs/screenshots/track.jpg" width="200" alt="Track tab" />
+  <img src="docs/screenshots/profile.jpg" width="200" alt="Profile tab" />
+</p>
+
+_Home, My Activity, Track, and Profile tabs (Pi Testnet)._
 
 ---
 
