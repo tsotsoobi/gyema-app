@@ -27,6 +27,20 @@ import { isGuest, type PiUser, type UserRole } from "@/lib/pi-network"
 import { ListingDetailSheet } from "./listing-detail-sheet"
 import { GuestPostGate } from "./guest-post-gate"
 
+// Bounded city list for normalized origin/destination matching.
+// Start with the Accra beachhead; grow as corridors open. Keeping this
+// constrained is what makes local-first board surfacing possible: free
+// text ("accra"/"Accra"/"Acra") would never match a "near me" filter.
+const GHANA_CITIES = [
+  "Accra", "Tema", "Kasoa", "Kumasi", "Koforidua", "Cape Coast",
+  "Takoradi", "Nkawkaw", "Obuasi", "Tarkwa", "Ho", "Hohoe",
+  "Sunyani", "Techiman", "Tamale", "Berekum", "Kintampo", "Goaso",
+  "Bechem", "Yendi", "Sefwi Wiawso", "Bibiani", "Bolgatanga", "Bawku",
+  "Wa", "Jirapa", "Dambai", "Jasikan", "Damongo", "Salaga",
+  "Nalerigu", "Walewale",
+  "Other",
+] as const
+
 interface HomeTabProps {
   role: UserRole
   user: PiUser
@@ -95,6 +109,8 @@ function TravellerHome({
   const valid =
     fromCity.trim() &&
     toCity.trim() &&
+    fromCity !== "Other" &&
+    toCity !== "Other" &&
     travelDate &&
     capacity &&
     price &&
@@ -231,21 +247,33 @@ function TravellerHome({
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="t-from">From City</Label>
-                <Input
-                  id="t-from"
-                  placeholder="Accra"
-                  value={fromCity}
-                  onChange={(e) => setFromCity(e.target.value)}
-                />
+                <Select value={fromCity} onValueChange={setFromCity}>
+                  <SelectTrigger id="t-from">
+                    <SelectValue placeholder="Select city" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GHANA_CITIES.map((city) => (
+                      <SelectItem key={city} value={city}>
+                        {city}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="t-to">To City</Label>
-                <Input
-                  id="t-to"
-                  placeholder="Kumasi"
-                  value={toCity}
-                  onChange={(e) => setToCity(e.target.value)}
-                />
+                <Select value={toCity} onValueChange={setToCity}>
+                  <SelectTrigger id="t-to">
+                    <SelectValue placeholder="Select city" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GHANA_CITIES.map((city) => (
+                      <SelectItem key={city} value={city}>
+                        {city}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
@@ -314,6 +342,12 @@ function TravellerHome({
               </p>
             </div>
 
+            {(fromCity === "Other" || toCity === "Other") && (
+              <div className="rounded-[14px] bg-secondary/10 border border-secondary/30 p-3 text-sm text-center text-muted-foreground">
+                Gyema is live in Ghana. Your corridor is coming soon, we are
+                expanding across Africa.
+              </div>
+            )}
             <Button
               className="w-full h-12 text-base font-semibold"
               onClick={handleSubmit}
@@ -398,6 +432,8 @@ function SenderHome({
     size &&
     fromCity.trim() &&
     toCity.trim() &&
+    fromCity !== "Other" &&
+    toCity !== "Other" &&
     deliverBy &&
     offer &&
     whatsapp.trim()
@@ -556,21 +592,33 @@ function SenderHome({
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="from">From City</Label>
-                <Input
-                  id="from"
-                  placeholder="Accra"
-                  value={fromCity}
-                  onChange={(e) => setFromCity(e.target.value)}
-                />
+                <Select value={fromCity} onValueChange={setFromCity}>
+                  <SelectTrigger id="from">
+                    <SelectValue placeholder="Select city" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GHANA_CITIES.map((city) => (
+                      <SelectItem key={city} value={city}>
+                        {city}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="to">To City</Label>
-                <Input
-                  id="to"
-                  placeholder="Tamale"
-                  value={toCity}
-                  onChange={(e) => setToCity(e.target.value)}
-                />
+                <Select value={toCity} onValueChange={setToCity}>
+                  <SelectTrigger id="to">
+                    <SelectValue placeholder="Select city" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GHANA_CITIES.map((city) => (
+                      <SelectItem key={city} value={city}>
+                        {city}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
@@ -613,6 +661,12 @@ function SenderHome({
               </p>
             </div>
 
+            {(fromCity === "Other" || toCity === "Other") && (
+              <div className="rounded-[14px] bg-secondary/10 border border-secondary/30 p-3 text-sm text-center text-muted-foreground">
+                Gyema is live in Ghana. Your corridor is coming soon, we are
+                expanding across Africa.
+              </div>
+            )}
             <Button
               className="w-full h-12 text-base font-semibold"
               onClick={handleSubmit}
