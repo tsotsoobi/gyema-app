@@ -16,6 +16,8 @@ import { GUEST_AREA_NAMES, quoteCedis } from "@/lib/guest-pricing"
 
 const GYEMA_WHATSAPP = "233500005780"
 
+const GUEST_SEND_ENABLED = process.env.NEXT_PUBLIC_GUEST_SEND_ENABLED === "true"
+
 type Step = "form" | "quote" | "done"
 
 export default function SendPage() {
@@ -83,12 +85,25 @@ export default function SendPage() {
     `Verify ${trackingId}`
   )}`
 
+  if (!GUEST_SEND_ENABLED) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6" style={{ backgroundColor: "#FEF7E6" }}>
+        <Card className="p-6 max-w-md text-center space-y-2">
+          <h1 className="text-xl font-bold">Gyema guest sending is coming soon</h1>
+          <p className="text-sm text-muted-foreground">
+            We are putting the finishing touches on public package sending.
+            Have a tracking ID? You can still follow any delivery on the Track page.
+          </p>
+        </Card>
+      </div>
+    )
+  }
   return (
     <div className="min-h-screen" style={{ backgroundColor: "#FEF7E6" }}>
       <div className="p-4" style={{ background: "linear-gradient(90deg, #1E1B4B, #15803D)" }}>
         <h1 className="text-2xl font-bold text-white">Gyema</h1>
         <p className="text-sm text-white/90 mt-1">
-          Send anything across Accra today. Your courier is identity-verified.
+          Send packages across Accra today. Your courier is identity-verified.
         </p>
       </div>
       <div className="h-1.5 flex">
@@ -216,7 +231,7 @@ export default function SendPage() {
               </p>
               {quote !== null ? (
                 <p className="text-3xl font-bold" style={{ color: "#15803D" }}>
-                  {quote} cedis
+                  {quote} GHS
                 </p>
               ) : (
                 <p className="text-sm" style={{ color: "#DC2626" }}>

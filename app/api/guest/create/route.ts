@@ -40,6 +40,9 @@ async function generateUniqueTrackingId(
 }
 
 export async function POST(request: NextRequest) {
+  if (process.env.NEXT_PUBLIC_GUEST_SEND_ENABLED !== "true") {
+    return NextResponse.json({ ok: false, reason: "disabled" }, { status: 403 })
+  }
   try {
     const body = await request.json()
     const {
