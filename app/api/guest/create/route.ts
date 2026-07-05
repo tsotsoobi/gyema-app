@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createAdminClient } from "@/lib/supabase-admin"
+import { GUEST_AREAS, quoteCedis as computeQuoteCedis } from "@/lib/guest-pricing"
 
 // Guest create: the cedis dispatch rail. Writes an UNVERIFIED draft to
 // guest_jobs (phone_verified = false). A separate verify step flips the flag;
@@ -15,14 +16,7 @@ import { createAdminClient } from "@/lib/supabase-admin"
 // Admin SDK uses Node crypto, which the Edge runtime does not expose.
 export const runtime = "nodejs"
 
-const GHANA_CITIES = [
-  "Accra", "Tema", "Kasoa", "Kumasi", "Koforidua", "Cape Coast",
-  "Takoradi", "Nkawkaw", "Obuasi", "Tarkwa", "Ho", "Hohoe",
-  "Sunyani", "Techiman", "Tamale", "Berekum", "Kintampo", "Goaso",
-  "Bechem", "Yendi", "Sefwi Wiawso", "Bibiani", "Bolgatanga", "Bawku",
-  "Wa", "Jirapa", "Dambai", "Jasikan", "Damongo", "Salaga",
-  "Nalerigu", "Walewale",
-]
+// Area validation and server-side pricing come from lib/guest-pricing.
 
 function mintGymCode(): string {
   return `GYM-${Math.random().toString(16).slice(2, 8).toUpperCase()}`
@@ -55,7 +49,7 @@ export async function POST(request: NextRequest) {
       recipientName, recipientPhone,
       senderPhone,
       whenPref, scheduledDate,
-      paymentType, quoteCedis,
+      paymentType,
     } = body ?? {}
 
     // Required-field validation
@@ -63,7 +57,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: false, reason: "bad_request" }, { status: 400 })
     }
     // Bounded city list (same normalized set as the app)
-    if (!GHANA_CITIES.includes(pickupArea) || !GHANA_CITIES.includes(dropoffArea)) {
+    if (!(pickupArea in GUEST_AREAS) || !(dropoffArea in GUEST_AREAS)) {
       return NextResponse.json({ ok: false, reason: "unbounded_city" }, { status: 400 })
     }
     if (!["small", "medium", "large"].includes(packageSize)) {
@@ -97,7 +91,7 @@ export async function POST(request: NextRequest) {
         when_pref: whenPref ?? null,
         scheduled_date: scheduledDate ?? null,
         payment_type: paymentType ?? null,
-        quote_cedis: quoteCedis ?? null,
+        quote_cedis: computeQuoteCedis(pickupArea, dropoffArea),
         status: "posted",
       })
       .select()
