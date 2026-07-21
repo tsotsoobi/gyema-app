@@ -342,7 +342,7 @@ function TravellerHome({
               const r = quoteCedisRangeForCities(fromCity, toCity)
               if (!r) return null
               return (
-                <p className="text-[11px] text-muted-foreground">
+                <p className="rounded-[14px] bg-secondary/10 border border-secondary/30 p-3 text-sm text-muted-foreground">
                   Typical dispatch rate on this corridor: {r.min === r.max ? r.min : `${r.min} to ${r.max}`} GHS.
                   Benchmark only, you set your Pi price.
                 </p>
@@ -682,7 +682,7 @@ function SenderHome({
               const r = quoteCedisRangeForCities(fromCity, toCity)
               if (!r) return null
               return (
-                <p className="text-[11px] text-muted-foreground">
+                <p className="rounded-[14px] bg-secondary/10 border border-secondary/30 p-3 text-sm text-muted-foreground">
                   Typical dispatch rate on this corridor: {r.min === r.max ? r.min : `${r.min} to ${r.max}`} GHS.
                   Benchmark only, you set your Pi price.
                 </p>
