@@ -30,10 +30,10 @@
 -- ---------------------------------------------------------------------------
 -- 1. Columns
 --
--- ALREADY APPLIED to Testnet ahead of this file, by hand. Kept here so the
--- file is a complete account of the schema the delivery code needs, and so
--- Mainnet can be brought up from this one file at mirror time. Re-running
--- against Testnet is a no-op.
+-- Section 1 was applied to Testnet by hand ahead of this file. On any project
+-- where that has not happened, these statements do the work. Kept here so the
+-- file is a complete account of the schema the delivery code needs. Re-running
+-- where the columns already exist is a no-op.
 --
 -- delivery_code_hash is nullable and that nullity is load-bearing, not
 -- incidental: it is the discriminator the whole feature branches on. A null
