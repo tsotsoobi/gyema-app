@@ -198,7 +198,7 @@ function show(value) {
 }
 
 function field(label, value) {
-  return `    ${label.padEnd(LABEL_WIDTH)}${value}`
+  return `    ${label.padEnd(LABEL_WIDTH)} ${value}`
 }
 
 function route(from, to) {
