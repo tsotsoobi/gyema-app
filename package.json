@@ -6,7 +6,9 @@
     "build": "next build",
     "dev": "next dev",
     "dispatch": "node scripts/dispatch-reader.mjs",
+    "hooks:install": "git config core.hooksPath .githooks",
     "lint": "next lint",
+    "security": "gitleaks git . --redact --no-banner --log-opts=--all && npm audit --omit=dev --audit-level=high",
     "start": "next start"
   },
   "dependencies": {
