@@ -13,12 +13,43 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { GUEST_AREA_NAMES, quoteCedis } from "@/lib/guest-pricing"
+import { TurnstileWidget } from "@/components/turnstile-widget"
 
 const GYEMA_WHATSAPP = "233500005780"
 
 const GUEST_SEND_ENABLED = process.env.NEXT_PUBLIC_GUEST_SEND_ENABLED === "true"
 
+// Empty string when the key is not set, which is what switches the whole bot
+// check off: TurnstileWidget renders nothing, no token is sent, and the route
+// skips verification because its own half of the configuration is missing too.
+// Both halves are checked independently on purpose, so a deployment that has
+// one and not the other fails in the visible direction rather than the silent
+// one (lib/turnstile.ts).
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? ""
+
 type Step = "form" | "quote" | "done"
+
+/**
+ * What to tell a sender whose post was refused.
+ *
+ * Every branch here is a false positive waiting to happen, which is why each
+ * one says what to do rather than that something went wrong. A rate-limited
+ * sender who is told "check the form" will edit a form that was already
+ * correct and post again, spending another slot on a window that is already
+ * full.
+ */
+function refusalMessage(status: number, reason: unknown): string {
+  if (status === 429 || reason === "rate_limited") {
+    return "Too many deliveries posted from this number or this network just now. Please wait a few minutes and try again."
+  }
+  if (reason === "limiter_unavailable") {
+    return "We could not confirm this post just now. Please try again in a minute."
+  }
+  if (reason === "bot_check_failed") {
+    return "The browser check did not pass. Please wait for the box above to tick and try again."
+  }
+  return "Could not create your delivery. Please check the form and try again."
+}
 
 export default function SendPage() {
   const [step, setStep] = useState<Step>("form")
@@ -38,6 +69,11 @@ export default function SendPage() {
   const [trackingId, setTrackingId] = useState("")
   const [errorMsg, setErrorMsg] = useState("")
   const [offList, setOffList] = useState(false)
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null)
+  // Bumped after every failed submit. A Turnstile token is single use, so
+  // retrying with the one already held would be refused by Cloudflare for a
+  // reason that has nothing to do with this sender.
+  const [turnstileResetKey, setTurnstileResetKey] = useState(0)
 
   const quote = offList
     ? null
@@ -70,17 +106,26 @@ export default function SendPage() {
           scheduledDate: whenPref === "date" ? scheduledDate || null : null,
           paymentType,
           offList,
+          turnstileToken,
         }),
       })
       const body = await res.json()
       if (!res.ok || !body?.ok) {
-        setErrorMsg("Could not create your delivery. Please check the form and try again.")
+        // A refusal that the sender can act on beats one generic line. The
+        // three cases below are the ones a real person can actually hit, and
+        // each of them has a different thing to do about it: wait, retry the
+        // check, or fix the form. Anything else keeps the original message.
+        setErrorMsg(refusalMessage(res.status, body?.reason))
+        // Whatever went wrong, the token is spent. Ask for a fresh one so the
+        // next attempt is not refused for the previous attempt's reason.
+        setTurnstileResetKey((n) => n + 1)
         return
       }
       setTrackingId(body.trackingId)
       setStep("done")
     } catch {
       setErrorMsg("Network problem. Please try again.")
+      setTurnstileResetKey((n) => n + 1)
     } finally {
       setSubmitting(false)
     }
@@ -300,12 +345,34 @@ export default function SendPage() {
               </p>
             </div>
 
+            <TurnstileWidget
+              siteKey={TURNSTILE_SITE_KEY}
+              onToken={setTurnstileToken}
+              resetKey={turnstileResetKey}
+            />
+
             {errorMsg && (
               <p className="text-sm" style={{ color: "#DC2626" }}>{errorMsg}</p>
             )}
 
-            <Button className="w-full h-11" disabled={(!offList && quote === null) || !senderPhone.trim() || submitting} onClick={handleSubmit}>
-              {submitting ? "Creating..." : "Confirm and verify my number"}
+            <Button
+              className="w-full h-11"
+              disabled={
+                (!offList && quote === null) ||
+                !senderPhone.trim() ||
+                submitting ||
+                // Only ever a gate when Turnstile is configured. Without a site
+                // key the widget renders nothing, no token can arrive, and this
+                // clause is false, so the button behaves as it always did.
+                (TURNSTILE_SITE_KEY !== "" && !turnstileToken)
+              }
+              onClick={handleSubmit}
+            >
+              {submitting
+                ? "Creating..."
+                : TURNSTILE_SITE_KEY !== "" && !turnstileToken
+                  ? "Checking your browser..."
+                  : "Confirm and verify my number"}
             </Button>
             <Button variant="ghost" className="w-full h-8 text-xs" onClick={() => setStep("form")}>
               Back

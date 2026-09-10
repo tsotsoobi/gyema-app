@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase-admin"
 import { GUEST_AREAS, quoteCedis as computeQuoteCedis } from "@/lib/guest-pricing"
 import { GuestCreateBody, parseJsonBody } from "@/lib/schemas"
 import { checkLimit, ipIdentifier, phoneIdentifier, retryAfterHeaders } from "@/lib/rate-limit"
+import { isTurnstileConfigured, verifyTurnstileToken } from "@/lib/turnstile"
 
 // Guest create: the cedis dispatch rail. Writes an UNVERIFIED draft to
 // guest_jobs (phone_verified = false). Nothing in this codebase flips that
@@ -129,6 +130,28 @@ export async function POST(request: NextRequest) {
     // deliberately bypass it and route to a human quote.
     if (!offList && (!(pickupArea in GUEST_AREAS) || !(dropoffArea in GUEST_AREAS))) {
       return NextResponse.json({ ok: false, reason: "unbounded_city" }, { status: 400 })
+    }
+
+    // The bot check, and it runs ONLY when both Turnstile keys are set on this
+    // deployment. Either one missing and this block is skipped entirely, so a
+    // half-configured environment behaves exactly as it did before Turnstile
+    // existed rather than refusing every post. The reasoning for that default
+    // is written out in lib/turnstile.ts.
+    //
+    // Placed after validation and before the tracking-ID generation, which is
+    // where the expensive work starts: a challenge is checked before up to
+    // eight pairs of collision lookups are spent on the caller.
+    if (isTurnstileConfigured()) {
+      const verdict = await verifyTurnstileToken(parsed.data.turnstileToken, ip)
+      if (!verdict.ok) {
+        // One reason for all three failure modes. A caller does not need to
+        // know whether their token was missing, replayed, or whether
+        // Cloudflare was unreachable, and telling them which would let a
+        // script tell a rejected challenge apart from an outage and wait for
+        // the outage.
+        console.warn("[gyema] guest create turnstile refusal:", verdict.reason)
+        return NextResponse.json({ ok: false, reason: "bot_check_failed" }, { status: 403 })
+      }
     }
 
     // The tight, per-person half of the rate limit. Checked here rather than
