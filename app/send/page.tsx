@@ -74,6 +74,11 @@ export default function SendPage() {
   // retrying with the one already held would be refused by Cloudflare for a
   // reason that has nothing to do with this sender.
   const [turnstileResetKey, setTurnstileResetKey] = useState(0)
+  // The challenge could not run at all, as opposed to not having been solved
+  // yet. Kept apart from the token because the two look the same from here and
+  // need opposite treatment: waiting is right for one and a dead end for the
+  // other.
+  const [turnstileUnavailable, setTurnstileUnavailable] = useState(false)
 
   const quote = offList
     ? null
@@ -347,9 +352,25 @@ export default function SendPage() {
 
             <TurnstileWidget
               siteKey={TURNSTILE_SITE_KEY}
-              onToken={setTurnstileToken}
+              onToken={(token) => {
+                setTurnstileToken(token)
+                // A token arriving proves the challenge is running after all,
+                // so a stale unavailable flag from a slow first load clears
+                // rather than stranding a sender who would now succeed.
+                if (token) setTurnstileUnavailable(false)
+              }}
+              onUnavailable={() => setTurnstileUnavailable(true)}
               resetKey={turnstileResetKey}
             />
+
+            {turnstileUnavailable && (
+              <p className="text-xs" style={{ color: "#DC2626" }}>
+                The browser check could not load, so this form cannot be
+                submitted from here. It is usually an ad blocker or a public
+                wifi login page. Turn the blocker off for this site, or send us
+                the delivery on WhatsApp and we will post it for you.
+              </p>
+            )}
 
             {errorMsg && (
               <p className="text-sm" style={{ color: "#DC2626" }}>{errorMsg}</p>
@@ -370,9 +391,11 @@ export default function SendPage() {
             >
               {submitting
                 ? "Creating..."
-                : TURNSTILE_SITE_KEY !== "" && !turnstileToken
-                  ? "Checking your browser..."
-                  : "Confirm and verify my number"}
+                : TURNSTILE_SITE_KEY !== "" && turnstileUnavailable
+                  ? "Browser check unavailable"
+                  : TURNSTILE_SITE_KEY !== "" && !turnstileToken
+                    ? "Checking your browser..."
+                    : "Confirm and verify my number"}
             </Button>
             <Button variant="ghost" className="w-full h-8 text-xs" onClick={() => setStep("form")}>
               Back

@@ -88,12 +88,25 @@ function loadTurnstileScript(): Promise<void> {
 export function TurnstileWidget({
   siteKey,
   onToken,
+  onUnavailable,
   resetKey = 0,
 }: {
   /** NEXT_PUBLIC_TURNSTILE_SITE_KEY. Empty string means render nothing. */
   siteKey: string
   /** Called with a token when the challenge is solved, and null when it is not. */
   onToken: (token: string | null) => void
+  /**
+   * Called when the challenge cannot run at all, as opposed to not having been
+   * solved yet. An ad blocker, a captive portal, or Cloudflare being
+   * unreachable all land here.
+   *
+   * Reported separately because the two states look identical from the outside
+   * and need opposite treatment. "Not solved yet" resolves itself in a second
+   * and the right thing to do is wait. "Cannot run" never resolves, and a
+   * parent that treats it as waiting leaves a disabled button and a sender
+   * with no idea why they cannot post.
+   */
+  onUnavailable?: () => void
   /** Any change to this value asks Cloudflare for a fresh challenge. */
   resetKey?: number
 }) {
@@ -106,9 +119,15 @@ export function TurnstileWidget({
   // form.
   const onTokenRef = useRef(onToken)
   onTokenRef.current = onToken
+  const onUnavailableRef = useRef(onUnavailable)
+  onUnavailableRef.current = onUnavailable
 
   const emit = useCallback((token: string | null) => {
     onTokenRef.current(token)
+  }, [])
+
+  const emitUnavailable = useCallback(() => {
+    onUnavailableRef.current?.()
   }, [])
 
   useEffect(() => {
@@ -134,11 +153,13 @@ export function TurnstileWidget({
       })
       .catch(() => {
         // The script did not load: an ad blocker, a captive portal, or
-        // Cloudflare being unreachable. Report no token and let the parent
-        // decide what to say. Throwing here would take the form down over a
-        // control that is meant to be additive.
+        // Cloudflare being unreachable. Report it as unavailable rather than
+        // as an unsolved challenge, so the parent can say something true
+        // instead of waiting forever. Throwing here would take the form down
+        // over a control that is meant to be additive.
         console.warn("[gyema] Turnstile script did not load")
         emit(null)
+        emitUnavailable()
       })
 
     return () => {
@@ -153,7 +174,7 @@ export function TurnstileWidget({
       }
       widgetIdRef.current = null
     }
-  }, [siteKey, emit])
+  }, [siteKey, emit, emitUnavailable])
 
   useEffect(() => {
     // Skip the initial render: resetKey starts at zero and the widget has just
