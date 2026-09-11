@@ -15,10 +15,16 @@ unmirrored commits, is closed. So one column covers both networks as they
 stand, and the second column is what merging this branch would add to Testnet
 alone.
 
-Nothing here was verified against a live database. Agents never mutate one and
-have no read path to either, so every claim below is read from files and from
-route behaviour. The catalog half is `docs/catalog-checks.sql`, run by hand.
-Where an item depends on it, the item says so rather than assuming.
+No agent read a live database. Agents never mutate one and have no read path to
+either, so every claim about code below is read from files and from route
+behaviour.
+
+The catalog half is not guesswork any more. **All four 2026-09-07 migrations are
+applied and catalog verified on both networks**, Testnet on 7 September and
+Mainnet on 8 September, with `docs/catalog-checks.sql` run after each file
+rather than a Success banner being read. That is the founder's report of work
+done by hand, and items 5 and 7 are scored on it. Items that still rest on an
+unread catalog say so where they sit.
 
 ---
 
@@ -26,28 +32,28 @@ Where an item depends on it, the item says so rather than assuming.
 
 | | Mainnet and Testnet `main`, today | Testnet with `phase-5-limits` merged |
 |---|---|---|
-| Done | 11 | 12 |
-| Partial | 7 | 6 |
+| Done | 13 | 14 |
+| Partial | 5 | 4 |
 | N/A | 2 | 2 |
-| **Score** | **6.1 / 10** | **6.7 / 10** |
+| **Score** | **7.2 / 10** | **7.8 / 10** |
 
 Score is Done divided by (20 minus N/A) times 10, so the denominator is 18.
 
-The target is 9. This branch moves one item. **Six of the seven Partials are
-closed by actions outside this repository, not by more code**, and the ladder is
-short:
+The target is 9. Four Partials remain once this branch merges, and the ladder to
+the target is two browser checks and one commit:
 
 | Action | Closes | Score |
 |---|---|---|
-| Merge this branch, redeploy Testnet | 11 | 6.7 |
-| Apply the four queued migrations, both networks | 5, 7 | 7.8 |
-| Report-only CSP pass in Pi Browser, then `CSP_ENFORCE=true` | 18 | 8.3 |
-| Verify Turnstile renders and solves in Pi Browser | 12 | 8.9 |
+| Merge this branch, redeploy Testnet | 11 | 7.8 |
+| Verify Turnstile renders and solves in Pi Browser | 12 | 8.3 |
+| Report-only CSP pass in Pi Browser, then `CSP_ENFORCE=true` | 18 | 8.9 |
 | One commit: dependabot, Actions, Node pin, audit fix | 20 | 9.4 |
 | One commit: an INSERT policy on `listings` | 8 | 10 |
 
-Two commits and four hosted actions stand between today and ten. Neither commit
-is large, and neither is on the critical path of anything a user does.
+Neither commit is large and neither sits on the critical path of anything a user
+does. Both remaining browser checks are the same shape: open the app in Pi
+Browser, fully closed and reopened first because it caches the bundle hard, and
+read what actually happens rather than what a desktop pass implied.
 
 ---
 
@@ -98,23 +104,28 @@ authenticated.
 Whether each policy says what the file says it says is item 7, and it is the
 half that needs the catalog.
 
-### 5. Encrypt sensitive data: Partial
+### 5. Encrypt sensitive data: Done
 
-Done: delivery codes are stored as a hash and compared with `timingSafeEqual`
+Delivery codes are stored as a hash and compared with `timingSafeEqual`
 (`lib/delivery-code.ts`), minted with `crypto.randomInt` rather than
 `Math.random`. Supabase Auth stores its own password hashes. Everything crosses
 the network over TLS, now forced (item 19).
 
-Not done: `sender_phone` and `recipient_phone` sit in plaintext columns. That
-matters more than it usually would, because **the last four digits of
-`sender_phone` are a credential on this rail**, not an identifier: they are the
-whole guard on three public routes, one of which returns the delivery code.
+The part that was open was specific and it is closed.
+**The last four digits of `sender_phone` are a credential on this rail**, not an
+identifier: they are the whole guard on three public routes, one of which
+returns the delivery code. `gyema_reader` held a direct column grant on both
+phone columns, and the operator report printed exactly those four digits for
+every job, so the guard travelled with the report anywhere it was pasted.
+`db/migrations/2026-09-07_dispatch_reader_masked_view.sql` replaces that grant
+with masked views. Applied to Testnet 7 September and Mainnet 8 September,
+catalog verified after each.
 
-**What closes it:** `db/migrations/2026-09-07_dispatch_reader_masked_view.sql`,
-applied to both networks. It takes the direct column grants away from
-`gyema_reader` and gives it masked views instead, so the operator report stops
-printing the guard for every job. Written, reviewed, not applied. Step 9 in
-`docs/deploy-order.md`.
+One residual, named so it is not rediscovered as new: the phone columns
+themselves are still plaintext at rest, protected by column grants and by
+masking rather than by encryption. That is a defensible position for this data
+and it is a position rather than an oversight. If you want it scored as Partial
+on that basis, say so and it costs half a point.
 
 ### 6. Enforce server-side auth: Done
 
@@ -130,26 +141,28 @@ answer 401 without one, and `lib/payments-policy.ts` re-reads the payment from
 Pi Platform rather than trusting anything the caller said about it. That was the
 sharpest finding in the Phase 0 inventory and it is closed.
 
-Depends on `scripts/backfill-app-metadata.mjs` having run per network, step 2 of
-`docs/deploy-order.md`. Until it does, a pre-existing Pioneer has no
-`app_metadata` claim and is refused, which is a functional failure rather than a
-security one: the code fails in the safe direction.
+Depended on `scripts/backfill-app-metadata.mjs` having run per network, which it
+has: it is step 2 of `docs/deploy-order.md` and the identity migration that
+follows it is applied on both networks. Had it not run, a pre-existing Pioneer
+would have had no `app_metadata` claim and been refused, which is a functional
+failure rather than a security one. The code fails in the safe direction.
 
-### 7. Lock record access: Partial
+### 7. Lock record access: Done
 
-The policies and grants are written and are the best-documented artefacts in the
-repository. They are not confirmed applied, and by invariant 8 a file is not
-catalog state.
+Two files carry it and both are applied and catalog verified on both networks,
+Testnet 7 September and Mainnet 8 September.
 
-Two files carry it. `2026-09-07_grant_baseline.sql` drops the Supabase default
-table-wide grants to anon and authenticated and re-grants per column, with the
-note that a column-level revoke cannot subtract from a table-wide grant.
-`2026-09-07_identity_from_app_metadata.sql` moves the policies onto the claim
-only the service-role key can write.
+`2026-09-07_grant_baseline.sql` drops the Supabase default table-wide grants to
+anon and authenticated and re-grants per column, with the note that a
+column-level revoke cannot subtract from a table-wide grant. It also closes the
+drift the Phase 0 inventory found, where Mainnet had been hand-tightened and
+Testnet still carried the defaults, so the two now hold one privilege set.
+`2026-09-07_identity_from_app_metadata.sql` moves every policy off
+`user_metadata`, which a user can write themselves with `updateUser`, onto
+`app_metadata`, which only the service-role key can write.
 
-**What closes it:** applying both, per network, Testnet first, then running
-`docs/catalog-checks.sql` and reading the result rather than the Success banner.
-Steps 4 through 7 in `docs/deploy-order.md`.
+Scored on the founder's catalog verification after each file rather than on the
+files themselves, which is the distinction invariant 8 exists to make.
 
 ### 8. Block field tampering: Partial
 
@@ -354,17 +367,22 @@ restart.
 | S-9 Pi token in localStorage | HIGH | Closed. No longer persisted |
 | S-11 raw Pi error echoed to the caller | MEDIUM | Closed |
 | S-12 no caps on guest free text | MEDIUM | Closed. `lib/schemas.ts` |
-| S-14 dispatch reader prints the guard | MEDIUM | Migration written, not applied. Item 5 |
+| S-14 dispatch reader prints the guard | MEDIUM | Closed. Masked views applied both networks, 7 and 8 September |
 | S-15 client-supplied Pioneer listing fields | MEDIUM | **Open.** Item 8 |
 | S-16 type and lint errors cannot fail a build | MEDIUM | **Open.** Item 20 |
 | S-17 `Math.random` tracking IDs | MEDIUM | **Open.** Mitigated, not fixed: the tracker's rate limit makes scanning impractical from one address, which is not the same as making the ID unguessable |
 | S-18 PostgREST filter interpolation | LOW | **Open**, bounded. Item 13 |
 | S-6, S-10, S-13, S-19 through S-23 | MEDIUM/LOW | Unchanged since the inventory |
 
-Two things nothing in this repository can answer, both restated because they
-have not moved: **what sets `guest_jobs.phone_verified = true`** is not in this
-codebase and the whole guest rail's visibility gate depends on it, and the
-catalog state of both databases is unread.
+One thing nothing in this repository can answer, restated because it has not
+moved: **what sets `guest_jobs.phone_verified = true`** is not in this codebase,
+and the whole guest rail's visibility gate depends on it.
+
+The other standing unknown, the catalog state of both databases, is answered for
+the four 2026-09-07 migrations and only for those. It was verified by hand after
+each file, on both networks. No agent read it, and nothing here claims a catalog
+fact beyond what those checks covered. The `listings` INSERT policy body, which
+item 8 turns on, is still unread by anyone in this repository.
 
 ---
 
@@ -416,8 +434,11 @@ Three deliberate softenings, each costing something and each worth it:
    Sign in. Read the console for CSP violations while the policy is still in
    report mode.
 5. Only if that console is silent, set `CSP_ENFORCE=true` and redeploy.
-6. Then the migrations, in the order in `docs/deploy-order.md`, one statement at
-   a time, each verified from catalog state rather than from a Success banner.
+
+The migrations are not part of this sequence any more. All four are applied and
+catalog verified on both networks, and `docs/deploy-order.md` is now a record of
+that rather than a plan. Nothing on this branch touches the database or needs a
+migration window.
 
 ### Mainnet, second, and only on an explicit go-ahead per change
 
@@ -430,7 +451,7 @@ Before Mainnet is asked for at all, these Testnet checks have to have passed:
 |---|---|
 | The limiter | A guest post, a track lookup, a last-4 confirmation and a sign-in all succeed in Pi Browser with Upstash configured |
 | Turnstile | The widget renders and solves in Pi Browser, and a post with it succeeds |
-| Turnstile keys on Mainnet | Not set until the Testnet check above passes. Setting them is what switches the check on |
+| Turnstile keys on Mainnet | Already set in Vercel, Production only, but inert until a Mainnet deploy bakes the site key. Do not deploy the mirror until the Testnet check above passes |
 | Upstash keys on Mainnet | Already set. The namespace test proves a Testnet flood cannot reach a Mainnet window, but that is a unit test and not a live one |
 
 Scan the file set for `pinet\.com|Testnet|testnet|8841|3681` before mirroring.
