@@ -140,6 +140,32 @@ export default function SendPage() {
     offList ? `Quote ${trackingId}: ${pickupArea} to ${dropoffArea}` : `Verify ${trackingId}`
   )}`
 
+  // The way out when the browser check cannot run.
+  //
+  // Deliberately NOT waLink. That one names a tracking ID, which does not
+  // exist yet: it is minted by the post this sender is being prevented from
+  // making, so before the done step it interpolates an empty string and the
+  // operator receives "Verify " with nothing after it. A fallback that arrives
+  // as an unanswerable message is not a fallback.
+  //
+  // This carries everything the operator needs to post the delivery by hand,
+  // because that is what the sender is being asked to hand over.
+  const waFallbackLink = `https://wa.me/${GYEMA_WHATSAPP}?text=${encodeURIComponent(
+    [
+      "Gyema delivery request. The browser check would not load, so I could not post it myself.",
+      `Pickup: ${[pickupArea, pickupLandmark].filter(Boolean).join(", ") || "not given"}`,
+      `Dropoff: ${[dropoffArea, dropoffLandmark].filter(Boolean).join(", ") || "not given"}`,
+      `Package: ${packageSize || "not given"}`,
+      contentsNote ? `Contents: ${contentsNote}` : null,
+      `Recipient: ${[recipientName, recipientPhone].filter(Boolean).join(", ") || "not given"}`,
+      `My number: ${senderPhone || "not given"}`,
+      whenPref === "date" && scheduledDate ? `When: ${scheduledDate}` : `When: ${whenPref}`,
+      `Payment: ${paymentType}`,
+    ]
+      .filter(Boolean)
+      .join("\n")
+  )}`
+
   if (!GUEST_SEND_ENABLED) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6" style={{ backgroundColor: "#FEF7E6" }}>
@@ -364,12 +390,23 @@ export default function SendPage() {
             />
 
             {turnstileUnavailable && (
-              <p className="text-xs" style={{ color: "#DC2626" }}>
-                The browser check could not load, so this form cannot be
-                submitted from here. It is usually an ad blocker or a public
-                wifi login page. Turn the blocker off for this site, or send us
-                the delivery on WhatsApp and we will post it for you.
-              </p>
+              <div className="space-y-2 rounded-md border p-3" style={{ borderColor: "#DC2626" }}>
+                <p className="text-xs" style={{ color: "#DC2626" }}>
+                  The browser check could not load, so this form cannot be sent
+                  from here. It is usually an ad blocker, or a public wifi
+                  network that wants you to sign in first.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Turn the blocker off for this page and reload, or send the
+                  delivery straight to us and we will post it for you. The
+                  message below is already filled in with what you entered.
+                </p>
+                <a href={waFallbackLink} target="_blank" rel="noopener noreferrer" className="block">
+                  <Button className="w-full h-11" style={{ backgroundColor: "#15803D" }}>
+                    Send this delivery on WhatsApp
+                  </Button>
+                </a>
+              </div>
             )}
 
             {errorMsg && (

@@ -32,6 +32,20 @@ import { useCallback, useEffect, useRef } from "react"
 const SCRIPT_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
 const SCRIPT_ID = "cf-turnstile-script"
 
+/**
+ * How long to wait for the challenge to become usable before giving up.
+ *
+ * A script tag that is intercepted rather than blocked fires neither load nor
+ * error: a captive portal can hold the request open, and a script element
+ * that was already in the document before this component mounted will never
+ * fire load again. Without a deadline both of those states wait forever, and
+ * waiting forever is the silent failure this component exists to avoid.
+ *
+ * Ten seconds. Turnstile normally loads in well under one, and this has to
+ * survive a slow mobile connection without declaring a working challenge dead.
+ */
+const LOAD_TIMEOUT_MS = 10_000
+
 type TurnstileApi = {
   render: (
     element: HTMLElement,
@@ -136,34 +150,74 @@ export function TurnstileWidget({
     if (!container) return
 
     let cancelled = false
+    // Set the moment this attempt reaches a verdict, so the three ways it can
+    // end (loaded, failed, timed out) cannot each report one.
+    let settled = false
+
+    // Every route to "this challenge cannot run" ends here. An ad blocker, a
+    // captive portal, Cloudflare being unreachable, and a render that throws
+    // all land on the same report, because they need the same answer from the
+    // parent: say so, and offer the way around it.
+    const reportUnavailable = (why: string) => {
+      console.warn(`[gyema] Turnstile unavailable: ${why}`)
+      emit(null)
+      emitUnavailable()
+    }
+
+    const timer = setTimeout(() => {
+      if (cancelled || settled) return
+      settled = true
+      reportUnavailable("did not load within the deadline")
+    }, LOAD_TIMEOUT_MS)
 
     loadTurnstileScript()
       .then(() => {
-        if (cancelled || !window.turnstile) return
-        widgetIdRef.current = window.turnstile.render(container, {
-          sitekey: siteKey,
-          callback: (token: string) => emit(token),
-          // An expired token is worth nothing to the route, so the parent is
-          // told to drop it rather than being left holding a value that will
-          // be refused at submit time.
-          "expired-callback": () => emit(null),
-          "error-callback": () => emit(null),
-          theme: "light",
-        })
+        if (cancelled || settled) return
+        settled = true
+        clearTimeout(timer)
+
+        // THE SILENT CASE, and the reason this branch is separate from the
+        // catch below. A captive portal answers the script request with its
+        // own login page and a 200, and some blockers answer with an empty
+        // body. Either way the load event fires and this promise resolves
+        // normally, but the global the script was supposed to define is not
+        // there. Returning quietly here, which is what this did before, left
+        // a disabled button reading "Checking your browser..." for as long as
+        // the sender was willing to look at it.
+        if (!window.turnstile) {
+          reportUnavailable("script resolved without defining window.turnstile")
+          return
+        }
+
+        try {
+          widgetIdRef.current = window.turnstile.render(container, {
+            sitekey: siteKey,
+            callback: (token: string) => emit(token),
+            // An expired token is worth nothing to the route, so the parent is
+            // told to drop it rather than being left holding a value that will
+            // be refused at submit time.
+            "expired-callback": () => emit(null),
+            "error-callback": () => emit(null),
+            theme: "light",
+          })
+        } catch {
+          // A bad site key, or a Turnstile build that does not like this
+          // container. Nothing the sender can do, but they still need telling.
+          reportUnavailable("render threw")
+        }
       })
       .catch(() => {
-        // The script did not load: an ad blocker, a captive portal, or
-        // Cloudflare being unreachable. Report it as unavailable rather than
-        // as an unsolved challenge, so the parent can say something true
-        // instead of waiting forever. Throwing here would take the form down
-        // over a control that is meant to be additive.
-        console.warn("[gyema] Turnstile script did not load")
-        emit(null)
-        emitUnavailable()
+        if (cancelled || settled) return
+        settled = true
+        clearTimeout(timer)
+        // The request was refused outright, which is what a blocker that
+        // cancels the request rather than faking a response produces.
+        reportUnavailable("script request failed")
       })
 
     return () => {
       cancelled = true
+      clearTimeout(timer)
       const id = widgetIdRef.current
       if (id && window.turnstile) {
         try {
