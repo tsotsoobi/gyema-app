@@ -171,18 +171,68 @@ The guest rail is done and is the pattern to copy. `status`, `quote_cedis` and
 `phone_verified` is written false on every insert with nothing in the codebase
 able to flip it.
 
-The Pioneer rail is not. `lib/listings-async.ts` still sends `posted_by_id`,
-`status`, `tracking_id` and `created_at` from the client through the authed
-Supabase client. Whether one Pioneer can post as another therefore depends
-entirely on the `listings` INSERT policy, which is the one policy body nobody
-in this repository has read.
+The Pioneer rail is not. `lib/listings-async.ts` sends the whole row from the
+client through the authed Supabase client.
 
-**What closes it:** an INSERT policy on `listings` with a `WITH CHECK` binding
-`posted_by_id` to the session claim, plus column defaults for `status`,
-`tracking_id` and `created_at`, or moving creation to a server route the way
-`cancel-open`, `cancel-matched` and `mark-in-transit` already moved. This is
-finding S-15 and it is the only Partial on this list that is a code change in
-this repository.
+The policy is no longer unknown. The catalog on both networks carries
+`listings_insert_own`, `with check (posted_by_id = ((auth.jwt() ->
+'app_metadata') ->> 'pi_uid'))`. That binds the poster to a claim only the
+service-role key can write, so **one Pioneer can no longer insert a listing
+attributed to another Pioneer's `posted_by_id`.** That was the specific unknown
+this item carried and it is answered.
+
+It does not close the item, because the grant it sits behind is table-wide.
+`2026-09-07_grant_baseline.sql:300` is `grant insert on public.listings to
+authenticated`, not a column list, so the policy is the only filter on the
+insert and it filters exactly one column. Everything else in the row is still
+whatever the client sent. Five things follow, and they are ordered by how much
+they cost somebody else:
+
+1. **`tracking_id` can be set to an existing guest job's code.** Nothing checks
+   it. The guest rail mints its own ID against both tables
+   (`app/api/guest/create/route.ts`, `generateUniqueTrackingId`); the Pioneer
+   side does no collision check at all, and now the value is client-chosen
+   anyway. No constraint can span two tables. Both trackers resolve listings
+   BEFORE guest jobs (`components/track-tab.tsx`, `components/track-view.tsx`:
+   `getListingByTrackingIdAsync(id) ?? getGuestJobByTrackingIdAsync(id)`), so a
+   listing sharing a guest job's code shadows that delivery on the public
+   tracker. A sender following their parcel sees the attacker's listing. This is
+   invariant 3, the two rails never blend, broken from the Pioneer side.
+2. **`matched_with_user_id` can be set to another Pioneer.**
+   `getMyListingsAsync` selects on `posted_by_id.eq` or
+   `matched_with_user_id.eq`, so a fabricated row appears in the victim's My
+   Activity as a job they never accepted, carrying an attacker-controlled
+   `whatsapp`. It is a phishing surface rather than a payment one: the
+   connection fee fires inside the accept flow in
+   `components/listing-detail-sheet.tsx`, not as a standalone reveal button on
+   an already-matched listing, so a phantom row does not extract a fee.
+3. **`posted_by_username` is unconstrained.** The policy pins the id and says
+   nothing about the display name, so a Pioneer can post under their own
+   `pi_uid` and another Pioneer's username. Every listings route authorizes on
+   `pi_uid`, so this is not an authorization bypass. It is still an
+   impersonation on the surface a human reads, and CLAUDE.md invariant 7 names
+   `pi_username` as the identity anchor.
+4. **`status` can be anything at insert.** A row can arrive as `completed` or
+   `in_transit`, bypassing every transition guard those server routes exist to
+   enforce. Reputation is not live, so this buys nothing today. The fabricated
+   rows would already be in the table on the day it ships.
+5. **`created_at` can be future-dated.** The open feed orders by `created_at`
+   descending, so a far-future value pins a listing to the top of it
+   indefinitely. Cheap and invisible.
+
+**What closes it:** replace the table-wide INSERT grant with a column list that
+excludes `status`, `tracking_id`, `created_at`, `matched_with_user_id`,
+`matched_with_username` and `matched_with_whatsapp`, give those columns database
+defaults, and extend the `WITH CHECK` to pin `posted_by_username` to the same
+claim. Or move creation to a server route, the way `cancel-open`,
+`cancel-matched` and `mark-in-transit` already moved, which is the pattern the
+guest rail already follows. This is finding S-15.
+
+**Unverified, and worth one query before choosing:** whether
+`public.listings.tracking_id` carries a unique index at all. Nothing in
+`db/migrations/` or `docs/catalog-checks.sql` creates or checks one, and the
+table predates version control. Without it, hole 1 above also works
+listing-against-listing.
 
 ### 9. Secure session cookies: N/A
 
@@ -368,7 +418,7 @@ restart.
 | S-11 raw Pi error echoed to the caller | MEDIUM | Closed |
 | S-12 no caps on guest free text | MEDIUM | Closed. `lib/schemas.ts` |
 | S-14 dispatch reader prints the guard | MEDIUM | Closed. Masked views applied both networks, 7 and 8 September |
-| S-15 client-supplied Pioneer listing fields | MEDIUM | **Open.** Item 8 |
+| S-15 client-supplied Pioneer listing fields | MEDIUM | **Open**, narrowed. The INSERT policy pins `posted_by_id`; the grant behind it is table-wide, so every other column is still client-set. Item 8 |
 | S-16 type and lint errors cannot fail a build | MEDIUM | **Open.** Item 20 |
 | S-17 `Math.random` tracking IDs | MEDIUM | **Open.** Mitigated, not fixed: the tracker's rate limit makes scanning impractical from one address, which is not the same as making the ID unguessable |
 | S-18 PostgREST filter interpolation | LOW | **Open**, bounded. Item 13 |
@@ -381,8 +431,9 @@ and the whole guest rail's visibility gate depends on it.
 The other standing unknown, the catalog state of both databases, is answered for
 the four 2026-09-07 migrations and only for those. It was verified by hand after
 each file, on both networks. No agent read it, and nothing here claims a catalog
-fact beyond what those checks covered. The `listings` INSERT policy body, which
-item 8 turns on, is still unread by anyone in this repository.
+fact beyond what those checks covered. The `listings` INSERT policy body is read and
+recorded at item 8. What remains unread there is whether `tracking_id` carries a
+unique index.
 
 ---
 
