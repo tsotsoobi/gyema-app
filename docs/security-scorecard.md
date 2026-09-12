@@ -251,7 +251,13 @@ control lives in Postgres and a refusal costs a person more than it protects. A
 refused last-4 attempt spends none of the ten a job allows, because the check
 runs before the job is read.
 
-**Testnet: Done**, live at `534fc71` with Upstash configured on Production.
+**Testnet: Done**, live with Upstash configured on Production.
+
+One note on the tracker bucket, since its number was argued partly from a
+predictable ID. Both rails now mint from `randomBytes` (S-17), so a `GYM-` code
+is no longer guessable from prior output, and 120 per 10 minutes is defence in
+depth against scanning rather than the thing standing between a guesser and a
+valid code. The number is unchanged and did not need to change.
 
 **Mainnet: Partial.** Nothing rate limits anything there. Closed by mirroring
 the limits work, which is prepared and not merged.
@@ -429,7 +435,7 @@ restart.
 | S-14 dispatch reader prints the guard | MEDIUM | Closed. Masked views applied both networks, 7 and 8 September |
 | S-15 client-supplied Pioneer listing fields | MEDIUM | Closed on Testnet, code and revoke both applied. Open on Mainnet until the revoke is applied there. Item 8 |
 | S-16 type and lint errors cannot fail a build | MEDIUM | **Open.** Item 20 |
-| S-17 `Math.random` tracking IDs | MEDIUM | Closed on the Pioneer rail: `app/api/listings/create` mints from `randomBytes`. **Open on the guest rail**, where `app/api/guest/create` still uses `Math.random`. One line, and it should be taken |
+| S-17 `Math.random` tracking IDs | MEDIUM | Closed on both rails and both networks. `app/api/listings/create` and `app/api/guest/create` both mint from `randomBytes`; Testnet `66c1c13`, Mainnet `8c6ab27` |
 | S-18 PostgREST filter interpolation | LOW | **Open**, bounded. Item 13 |
 | S-6, S-10, S-13, S-19 through S-23 | MEDIUM/LOW | Unchanged since the inventory |
 
