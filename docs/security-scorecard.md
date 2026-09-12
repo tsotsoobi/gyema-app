@@ -8,12 +8,16 @@ Testnet is `tsotsoobi/gyema-app`, confirmed by `git remote get-url origin`.
 Mainnet `main` is `d74a174`, read only, through the local clone at
 `C:\Users\HP\Documents\gyema-app-mainnet`.
 
-**The two networks carry identical application code today.** The 7 September
-hardening run reached Mainnet as PR #30 on 8 September, and Testnet `4ff4aa1`
-is mirrored there as `a5c06a8`. The drift the Phase 0 inventory recorded, 29
-unmirrored commits, is closed. So one column covers both networks as they
-stand, and the second column is what merging this branch would add to Testnet
-alone.
+**The two networks carry different application code, and the difference is
+deliberate.** Testnet `main` is `534fc71`: the listings route plus the rate
+limiter and Turnstile. Mainnet `main` is `cd9397b`: the listings route only,
+mirrored through the blob-hash gate as PR #31 on 12 September. The limits work
+is prepared for Mainnet and not merged, because it is gated on a Pi Browser
+pass that has now happened on Testnet and not there.
+
+Two branches exist and are counted in neither column: `fix/turnstile-error-loop`
+closes a spin found in Pi Browser on 12 September, and `operator-console` would
+move item 9 off N/A by introducing the app's first cookie.
 
 No agent read a live database. Agents never mutate one and have no read path to
 either, so every claim about code below is read from files and from route
@@ -30,30 +34,45 @@ unread catalog say so where they sit.
 
 ## Score
 
-| | Mainnet and Testnet `main`, today | Testnet with `phase-5-limits` merged |
+The two networks no longer carry the same code. Testnet `main` is `534fc71`,
+carrying the listings route and the limits work. Mainnet `main` is `cd9397b`,
+carrying the listings route only. So they are scored apart.
+
+| | Testnet `534fc71` | Mainnet `cd9397b` |
 |---|---|---|
-| Done | 13 | 14 |
-| Partial | 5 | 4 |
+| Done | 16 | 13 |
+| Partial | 2 | 5 |
 | N/A | 2 | 2 |
-| **Score** | **7.2 / 10** | **7.8 / 10** |
+| **Score** | **8.9 / 10** | **7.2 / 10** |
 
 Score is Done divided by (20 minus N/A) times 10, so the denominator is 18.
 
-The target is 9. Four Partials remain once this branch merges, and the ladder to
-the target is two browser checks and one commit:
+**Testnet is at the target.** 8.9 rounds against a goal of 9 and is one item
+short of it, which is what the brief allows: at most two items not Done.
 
-| Action | Closes | Score |
+Two Partials remain on Testnet and both are named below with what closes them.
+Item 18 needs a report-only CSP pass read in the Pi Browser console. Item 20
+needs one commit: dependabot, a Node pin, a GitHub Actions workflow and
+`npm audit fix`, with the three existing type errors fixed in the same commit or
+the first CI run fails on them.
+
+| Action | Closes | Testnet |
 |---|---|---|
-| Merge this branch, redeploy Testnet | 11 | 7.8 |
-| Verify Turnstile renders and solves in Pi Browser | 12 | 8.3 |
-| Report-only CSP pass in Pi Browser, then `CSP_ENFORCE=true` | 18 | 8.9 |
-| One commit: dependabot, Actions, Node pin, audit fix | 20 | 9.4 |
-| One commit: an INSERT policy on `listings` | 8 | 10 |
+| Report-only CSP pass in Pi Browser, then `CSP_ENFORCE=true` | 18 | 9.4 |
+| One commit: dependabot, Actions, Node pin, audit fix | 20 | 10 |
 
-Neither commit is large and neither sits on the critical path of anything a user
-does. Both remaining browser checks are the same shape: open the app in Pi
-Browser, fully closed and reopened first because it caches the bundle hard, and
-read what actually happens rather than what a desktop pass implied.
+**Mainnet trails by three items and none of them is a code gap in that
+repository.** Items 11 and 12 are absent because the limits work has not been
+mirrored there. Item 8 is Partial for a different and sharper reason: the code
+is mirrored, but `db/migrations/2026-09-11_listings_create_server_side.sql` is
+not applied, so `authenticated` still holds a table-wide INSERT grant on
+`listings`. The app no longer sends the five fields, and a hand-built PostgREST
+request still can.
+
+| Action | Closes | Mainnet |
+|---|---|---|
+| Apply the 2026-09-11 revoke migration | 8 | 7.8 |
+| Mirror and merge the limits work | 11, 12 | 8.9 |
 
 ---
 
@@ -164,75 +183,38 @@ Testnet still carried the defaults, so the two now hold one privilege set.
 Scored on the founder's catalog verification after each file rather than on the
 files themselves, which is the distinction invariant 8 exists to make.
 
-### 8. Block field tampering: Partial
+### 8. Block field tampering: Done on Testnet, Partial on Mainnet
 
-The guest rail is done and is the pattern to copy. `status`, `quote_cedis` and
-`tracking_id` are all derived server side in `app/api/guest/create/route.ts`, and
-`phone_verified` is written false on every insert with nothing in the codebase
-able to flip it.
+The guest rail always derived `status`, `quote_cedis` and `tracking_id` server
+side. The Pioneer rail does now too.
 
-The Pioneer rail is not. `lib/listings-async.ts` sends the whole row from the
-client through the authed Supabase client.
+Creation moved from a client INSERT to `app/api/listings/create`. The server
+owns `posted_by_id`, `posted_by_username`, `status`, `tracking_id` and
+`created_at`, mints the tracking ID against BOTH tables, and refuses the
+`matched_with_*` columns outright. `ListingCreateBody` is strict, so a body
+carrying any server-owned field is a 400 with reason `forbidden_field` rather
+than a value silently dropped, which also closes a column added to this table
+in future on the day it is added.
 
-The policy is no longer unknown. The catalog on both networks carries
-`listings_insert_own`, `with check (posted_by_id = ((auth.jwt() ->
-'app_metadata') ->> 'pi_uid'))`. That binds the poster to a claim only the
-service-role key can write, so **one Pioneer can no longer insert a listing
-attributed to another Pioneer's `posted_by_id`.** That was the specific unknown
-this item carried and it is answered.
+The catalog policy `listings_insert_own` pinned `posted_by_id` and one column
+only, because the grant behind it was table wide. The revoke closes the rest.
 
-It does not close the item, because the grant it sits behind is table-wide.
-`2026-09-07_grant_baseline.sql:300` is `grant insert on public.listings to
-authenticated`, not a column list, so the policy is the only filter on the
-insert and it filters exactly one column. Everything else in the row is still
-whatever the client sent. Five things follow, and they are ordered by how much
-they cost somebody else:
+**Testnet: Done.** Verified end to end on 11 September. `GYM-B42CA4` and
+`GYM-9CCB9F` posted in Pi Browser before the migration, the migration applied,
+the column privileges query reading anon and authenticated SELECT on 25
+columns, authenticated UPDATE on 2, INSERT only `postgres` and `service_role`,
+and `GYM-A74042` posted after the revoke.
 
-1. **`tracking_id` can be set to an existing guest job's code.** Nothing checks
-   it. The guest rail mints its own ID against both tables
-   (`app/api/guest/create/route.ts`, `generateUniqueTrackingId`); the Pioneer
-   side does no collision check at all, and now the value is client-chosen
-   anyway. No constraint can span two tables. Both trackers resolve listings
-   BEFORE guest jobs (`components/track-tab.tsx`, `components/track-view.tsx`:
-   `getListingByTrackingIdAsync(id) ?? getGuestJobByTrackingIdAsync(id)`), so a
-   listing sharing a guest job's code shadows that delivery on the public
-   tracker. A sender following their parcel sees the attacker's listing. This is
-   invariant 3, the two rails never blend, broken from the Pioneer side.
-2. **`matched_with_user_id` can be set to another Pioneer.**
-   `getMyListingsAsync` selects on `posted_by_id.eq` or
-   `matched_with_user_id.eq`, so a fabricated row appears in the victim's My
-   Activity as a job they never accepted, carrying an attacker-controlled
-   `whatsapp`. It is a phishing surface rather than a payment one: the
-   connection fee fires inside the accept flow in
-   `components/listing-detail-sheet.tsx`, not as a standalone reveal button on
-   an already-matched listing, so a phantom row does not extract a fee.
-3. **`posted_by_username` is unconstrained.** The policy pins the id and says
-   nothing about the display name, so a Pioneer can post under their own
-   `pi_uid` and another Pioneer's username. Every listings route authorizes on
-   `pi_uid`, so this is not an authorization bypass. It is still an
-   impersonation on the surface a human reads, and CLAUDE.md invariant 7 names
-   `pi_username` as the identity anchor.
-4. **`status` can be anything at insert.** A row can arrive as `completed` or
-   `in_transit`, bypassing every transition guard those server routes exist to
-   enforce. Reputation is not live, so this buys nothing today. The fabricated
-   rows would already be in the table on the day it ships.
-5. **`created_at` can be future-dated.** The open feed orders by `created_at`
-   descending, so a far-future value pins a listing to the top of it
-   indefinitely. Cheap and invisible.
+**Mainnet: Partial, and the reason is the grant rather than the code.** The
+code is mirrored at `cd9397b`. `db/migrations/2026-09-11_listings_create_server_side.sql`
+is NOT applied, so `authenticated` still holds table-wide INSERT on `listings`.
+The app no longer sends those five fields; a hand-built PostgREST request with
+the anon key and a session still can.
 
-**What closes it:** replace the table-wide INSERT grant with a column list that
-excludes `status`, `tracking_id`, `created_at`, `matched_with_user_id`,
-`matched_with_username` and `matched_with_whatsapp`, give those columns database
-defaults, and extend the `WITH CHECK` to pin `posted_by_username` to the same
-claim. Or move creation to a server route, the way `cancel-open`,
-`cancel-matched` and `mark-in-transit` already moved, which is the pattern the
-guest rail already follows. This is finding S-15.
-
-**Unverified, and worth one query before choosing:** whether
-`public.listings.tracking_id` carries a unique index at all. Nothing in
-`db/migrations/` or `docs/catalog-checks.sql` creates or checks one, and the
-table predates version control. Without it, hole 1 above also works
-listing-against-listing.
+**What closes it on Mainnet:** apply that migration, after posting a trip and a
+package in Pi Browser on `gyema8841.pinet.com` to confirm the route carries
+creation while the old path is still there to fall back on. The sequence is in
+the migration.
 
 ### 9. Secure session cookies: N/A
 
@@ -251,52 +233,67 @@ first sign-in of a misconfigured deployment rather than during a build.
 The two networks must not share a salt. That is a hosted fact this repository
 cannot check.
 
-### 11. Rate limit login: Done on this branch, Partial on both mains
+### 11. Rate limit login: Done on Testnet, Partial on Mainnet
 
-**Mainnet and Testnet `main` today: nothing rate limits anything.** That is
-finding S-5 and it is still open on both.
+`lib/rate-limit.ts` puts a shared Upstash counter in front of `/api/auth/verify`
+and every other route a stranger can reach. Forty per five minutes per address
+on sign-in, checked before the Pi Platform round trip so a flood is refused
+before it is paid for.
 
-On `phase-5-limits`: `lib/rate-limit.ts` puts a shared Upstash counter in front
-of `/api/auth/verify` and every other route a stranger can reach, checked before
-the Pi Platform round trip so a flood is refused before it is paid for. Forty
-per five minutes per address, which is one sign-in every seven seconds
-sustained. Keys are namespaced per network on the Supabase project ref, so the
-single shared Upstash database cannot let a Testnet flood eat a Mainnet window.
+Keys are namespaced on the Supabase project ref rather than on the network
+flag, so the single shared Upstash database cannot let a Testnet flood exhaust a
+Mainnet window even if `NEXT_PUBLIC_IS_TESTNET` were ever unset on both. A test
+asserts that.
 
-Two caveats worth writing down rather than discovering later. It fails open on a
-Redis error, deliberately, because this route is the only way anybody signs in.
-And Upstash credentials are set on Production only, so **preview deployments run
-with no limiter at all**, which is correct for a preview and worth knowing
-before one is shared.
+Only the guest write path fails closed on a Redis error. Sign-in, the tracker,
+the board and the three last-4 routes fail open and log, because on those the
+control lives in Postgres and a refusal costs a person more than it protects. A
+refused last-4 attempt spends none of the ten a job allows, because the check
+runs before the job is read.
 
-### 12. Add bot protection: Partial
+**Testnet: Done**, live at `534fc71` with Upstash configured on Production.
 
-Cloudflare Turnstile ships on this branch, on the guest post flow, verified
-server side in `lib/turnstile.ts`. Configuration fails open and verification
-fails closed, and both directions are tested.
+**Mainnet: Partial.** Nothing rate limits anything there. Closed by mirroring
+the limits work, which is prepared and not merged.
 
-Three reasons it is not Done.
+Two caveats that hold on both networks. Upstash credentials are Production only,
+so preview deployments run with no limiter at all, which is correct for a
+preview and worth knowing before one is shared. And a per-address limit under
+Ghanaian carrier NAT is really a per-carrier-egress limit, which is why every
+per-address number is set well above any plausible cluster of real users and the
+one tight limit is keyed on the sender's own phone number instead.
 
-First, **it has not been seen working in Pi Browser.** The widget renders in an
-iframe from `challenges.cloudflare.com` and the app is itself framed by a Pi
-Browser proxy. The CSP names that origin in all four directives it needs, so the
-policy is not the blocker, but a desktop pass cannot tell you a challenge solves
-inside Pi Browser any more than it could tell you the Pi SDK authenticates
-there. That lesson is already written into `lib/csp.ts` and it applies again.
+### 12. Add bot protection: Done on Testnet, Partial on Mainnet
 
-Second, `NEXT_PUBLIC_TURNSTILE_SITE_KEY` bakes at build time, so the keys
-existing in Vercel is not the same as the check running. It needs a redeploy.
+Cloudflare Turnstile on the guest post flow, verified server side in
+`lib/turnstile.ts`. Configuration fails open, so either key missing means the
+check does not run and a half-configured deployment keeps working rather than
+taking the only unauthenticated write in the app down. Verification fails
+closed, so once both keys are set a token Cloudflare rejects and a siteverify
+call that errors are both refusals. Every failure answers with one reason, so a
+caller cannot tell a rejected challenge from an outage and wait for the outage.
 
-Third, it is on guest creation and **not** on the three last-4 routes, which are
-also stranger-submittable. That was a judgement call: those routes are reached
-by a sender standing at a door, they already carry permanent per-job attempt
-ceilings, and putting an interactive challenge in front of a delivery
-confirmation risks the worst false positive in the application. The helper is
-one line to apply if that call is wrong.
+**VERIFIED IN PI BROWSER on 12 September**, which is what closes this item. The
+widget renders and solves in Pi Browser and in desktop Chrome on Testnet. An
+earlier Pi Browser attempt failed with a wrong site key, which is what surfaced
+the spin bug below; with the corrected key it solves.
 
-**What closes it:** a Testnet redeploy, then opening the guest post page in Pi
-Browser, fully closed and reopened first because Pi Browser caches the bundle
-hard, and confirming the widget renders and the post succeeds.
+That first attempt was worth the trouble. It showed the widget reporting
+`did not load within the deadline` and the button sitting disabled forever,
+because a wrong key makes Cloudflare answer 400, Turnstile retries indefinitely,
+and the load deadline had already been cleared by the successful script load.
+Fixed on `fix/turnstile-error-loop`: three consecutive challenge errors, or ten
+seconds after the first error, now falls through to the red panel and the
+prefilled WhatsApp handover.
+
+**Mainnet: Partial.** No Turnstile there. The keys exist on the Vercel project
+and are inert until a deploy bakes the site key in.
+
+Scoped to guest creation and deliberately not applied to the three last-4
+routes. Those are reached by a sender standing at a door, they already carry
+permanent per-job attempt ceilings, and an interactive challenge in front of a
+delivery confirmation is the worst false positive this app could ship. The
+helper is one line to apply if that call is wrong.
 
 ### 13. Parameterize queries: Done
 
@@ -348,20 +345,32 @@ or code appears in a public payload.
 
 Shipped in `next.config.mjs` and `middleware.ts`: HSTS with preload and a
 two-year age, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`,
-and a CSP with a per-request nonce that names every Pi origin read out of the
-SDK bundle's own source rather than guessed, plus the Turnstile origin.
+and a CSP with a per-request nonce naming every Pi origin read out of the SDK
+bundle's own source plus the Turnstile origin in four directives.
 `tests/headers.test.ts` and `tests/csp.test.ts` cover them.
 
-**The CSP is report-only.** `cspHeaderName` sends
-`Content-Security-Policy-Report-Only` unless `CSP_ENFORCE` is exactly `"true"`,
-and that default is deliberate: enforcing an earlier version of this policy on
-Testnet broke sign-in, and the desktop pass that had looked clean could not have
-caught it, because `frame-ancestors` is inert when the page is not framed and
-`connect-src` is never exercised until a real `Pi.authenticate` runs.
+**Partial for one recorded reason: the CSP cannot be closed without a
+report-only pass read in the Pi Browser console, and that pass has not been
+done.** The policy sends `Content-Security-Policy-Report-Only` unless
+`CSP_ENFORCE` is exactly `"true"`, so today it blocks nothing and the header set
+is not doing the job it was written for.
+
+Turnstile solving in Pi Browser on 12 September does NOT close this, and the
+reason is worth stating so it is not mistaken for evidence later. The policy is
+report-only, so it blocks nothing regardless. A challenge solving tells you the
+browser could reach Cloudflare; it tells you nothing about whether the policy
+would have stopped it had it been enforcing. Only a violation report, or the
+absence of one, answers that.
+
+A desktop pass cannot substitute. `frame-ancestors` is inert when the page is
+not framed, and `connect-src` is never exercised until a real `Pi.authenticate`
+runs, so two of the directives most likely to break sign-in are unreachable
+outside Pi Browser. That is not theory: enforcing an earlier version of this
+policy on Testnet broke sign-in after a desktop pass had looked clean.
 
 **What closes it:** open Testnet in Pi Browser with the policy in report mode,
-read the console, and set `CSP_ENFORCE=true` only if it is silent. A policy that
-blocks nothing is not a header set.
+sign in, post, and read the console. Every violation names its directive and
+its blocked URI. If it is silent, set `CSP_ENFORCE=true` and redeploy.
 
 ### 19. Force HTTPS: Done
 
@@ -411,16 +420,16 @@ restart.
 | S-2 last-4 guard has no ceiling | HIGH | Closed. `lib/last4-guard.ts`, ten attempts, no decay |
 | S-3 payment routes unauthenticated | HIGH | Closed. `resolveCaller` plus `lib/payments-policy.ts` |
 | S-4 accept returns the delivery code | HIGH | Closed, with a test |
-| S-5 no rate limiting or bot protection | HIGH | Closed on this branch. Open on both mains |
-| S-7 no security headers | HIGH | Closed, CSP report-only. Item 18 |
+| S-5 no rate limiting or bot protection | HIGH | Closed on Testnet, verified in Pi Browser 12 September. Open on Mainnet until the limits mirror merges |
+| S-7 no security headers | HIGH | Shipped on both. CSP still report-only, so not yet doing its job. Item 18 |
 | S-8 `PIONEER_PASSWORD_SALT` single point | HIGH | Mitigated by `lib/env-guard.ts`. Rotation is hosted |
 | S-9 Pi token in localStorage | HIGH | Closed. No longer persisted |
 | S-11 raw Pi error echoed to the caller | MEDIUM | Closed |
 | S-12 no caps on guest free text | MEDIUM | Closed. `lib/schemas.ts` |
 | S-14 dispatch reader prints the guard | MEDIUM | Closed. Masked views applied both networks, 7 and 8 September |
-| S-15 client-supplied Pioneer listing fields | MEDIUM | **Open**, narrowed. The INSERT policy pins `posted_by_id`; the grant behind it is table-wide, so every other column is still client-set. Item 8 |
+| S-15 client-supplied Pioneer listing fields | MEDIUM | Closed on Testnet, code and revoke both applied. Open on Mainnet until the revoke is applied there. Item 8 |
 | S-16 type and lint errors cannot fail a build | MEDIUM | **Open.** Item 20 |
-| S-17 `Math.random` tracking IDs | MEDIUM | **Open.** Mitigated, not fixed: the tracker's rate limit makes scanning impractical from one address, which is not the same as making the ID unguessable |
+| S-17 `Math.random` tracking IDs | MEDIUM | Closed on the Pioneer rail: `app/api/listings/create` mints from `randomBytes`. **Open on the guest rail**, where `app/api/guest/create` still uses `Math.random`. One line, and it should be taken |
 | S-18 PostgREST filter interpolation | LOW | **Open**, bounded. Item 13 |
 | S-6, S-10, S-13, S-19 through S-23 | MEDIUM/LOW | Unchanged since the inventory |
 
@@ -472,19 +481,22 @@ Three deliberate softenings, each costing something and each worth it:
 
 ## Deployment, per network
 
-### Testnet, first
+### Testnet, what is left
 
-1. Review this branch. Nothing here is merged and nothing is pushed.
-2. Merge `phase-5-limits`. The gate is both facts: `main` fast-forwards on
-   `git pull` **and** a new Production deployment appears. A green branch build
-   is not a merge.
-3. The redeploy is what bakes `NEXT_PUBLIC_TURNSTILE_SITE_KEY` into the client,
-   so the bot check does not exist until it happens.
-4. In Pi Browser, fully closed and reopened first: post a guest delivery and
-   confirm the Turnstile widget renders and the post succeeds. Track a job.
-   Sign in. Read the console for CSP violations while the policy is still in
-   report mode.
-5. Only if that console is silent, set `CSP_ENFORCE=true` and redeploy.
+Steps 1 through 4 are done. The limits work merged as `534fc71`, the redeploy
+baked the site key, and Turnstile was confirmed rendering and solving in Pi
+Browser and desktop Chrome on 12 September.
+
+1. Merge `fix/turnstile-error-loop`, which closes the spin that first Pi Browser
+   attempt exposed.
+2. Read the console for CSP violations in Pi Browser while the policy is still
+   in report mode. This is the outstanding half of item 18 and nothing else
+   substitutes for it.
+3. Only if that console is silent, set `CSP_ENFORCE=true` and redeploy.
+4. One commit for item 20: dependabot, a Node pin in `.nvmrc` and `engines`, a
+   GitHub Actions workflow, and `npm audit fix`. Fix the three existing type
+   errors in the same commit, or the first CI run fails on them, and remove the
+   two `ignore` flags in `next.config.mjs` once it passes.
 
 The migrations are not part of this sequence any more. All four are applied and
 catalog verified on both networks, and `docs/deploy-order.md` is now a record of
