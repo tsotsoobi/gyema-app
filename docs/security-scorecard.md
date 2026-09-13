@@ -8,16 +8,15 @@ Testnet is `tsotsoobi/gyema-app`, confirmed by `git remote get-url origin`.
 Mainnet `main` is `d74a174`, read only, through the local clone at
 `C:\Users\HP\Documents\gyema-app-mainnet`.
 
-**The two networks carry different application code, and the difference is
-deliberate.** Testnet `main` is `534fc71`: the listings route plus the rate
-limiter and Turnstile. Mainnet `main` is `cd9397b`: the listings route only,
-mirrored through the blob-hash gate as PR #31 on 12 September. The limits work
-is prepared for Mainnet and not merged, because it is gated on a Pi Browser
-pass that has now happened on Testnet and not there.
+**The two networks now carry the same application code and the same database
+posture.** Testnet `main` is `02b2dae`, Mainnet `main` is `b0d2f50`, and the
+only files that differ are the four held by standing instruction plus this
+document and the screenshots. Every 2026-09-07 migration, the 2026-09-11
+revoke, and every fix through 13 September are applied and deployed on both.
 
-Two branches exist and are counted in neither column: `fix/turnstile-error-loop`
-closes a spin found in Pi Browser on 12 September, and `operator-console` would
-move item 9 off N/A by introducing the app's first cookie.
+One branch exists and is counted in neither column: `operator-console` would
+move item 9 off N/A by introducing the app's first cookie, and it carries its
+own prerequisite migration for the `auth_events` CHECK constraint.
 
 No agent read a live database. Agents never mutate one and have no read path to
 either, so every claim about code below is read from files and from route
@@ -34,16 +33,16 @@ unread catalog say so where they sit.
 
 ## Score
 
-The two networks no longer carry the same code. Testnet `main` is `534fc71`,
-carrying the listings route and the limits work. Mainnet `main` is `cd9397b`,
-carrying the listings route only. So they are scored apart.
+The two networks carry the same code and the same database posture, so the two
+columns agree. They are kept apart because they have disagreed before and the
+column that matters is the right-hand one.
 
-| | Testnet `534fc71` | Mainnet `cd9397b` |
+| | Testnet `02b2dae` | Mainnet `b0d2f50` |
 |---|---|---|
-| Done | 16 | 13 |
-| Partial | 2 | 5 |
+| Done | 16 | 16 |
+| Partial | 2 | 2 |
 | N/A | 2 | 2 |
-| **Score** | **8.9 / 10** | **7.2 / 10** |
+| **Score** | **8.9 / 10** | **8.9 / 10** |
 
 Score is Done divided by (20 minus N/A) times 10, so the denominator is 18.
 
@@ -61,18 +60,19 @@ the first CI run fails on them.
 | Report-only CSP pass in Pi Browser, then `CSP_ENFORCE=true` | 18 | 9.4 |
 | One commit: dependabot, Actions, Node pin, audit fix | 20 | 10 |
 
-**Mainnet trails by three items and none of them is a code gap in that
-repository.** Items 11 and 12 are absent because the limits work has not been
-mirrored there. Item 8 is Partial for a different and sharper reason: the code
-is mirrored, but `db/migrations/2026-09-11_listings_create_server_side.sql` is
-not applied, so `authenticated` still holds a table-wide INSERT grant on
-`listings`. The app no longer sends the five fields, and a hand-built PostgREST
-request still can.
+**Mainnet has caught up.** The limits work and Turnstile mirrored as PR #32 and
+were confirmed working there by a guest post, `GYM-6E4A4C`, on 13 September.
+The 2026-09-11 revoke is applied, with `GYM-B5CF11` and `GYM-6A6C61` posted
+before it and `GYM-31D0AF` and `GYM-5EC78B` after, and
+`information_schema.role_table_grants` now returns no rows at all for `anon` or
+`authenticated` on `public.listings`.
 
-| Action | Closes | Mainnet |
-|---|---|---|
-| Apply the 2026-09-11 revoke migration | 8 | 7.8 |
-| Mirror and merge the limits work | 11, 12 | 8.9 |
+That last result is worth reading correctly, because zero rows looks alarming
+and is not. `role_table_grants` lists TABLE-level grants only. The column-level
+SELECT and UPDATE the app depends on live in
+`information_schema.column_privileges` and are untouched by that migration,
+which revoked one thing: the table-wide INSERT. The two successful posts after
+it are the behavioural half of the same proof.
 
 ---
 
@@ -183,38 +183,37 @@ Testnet still carried the defaults, so the two now hold one privilege set.
 Scored on the founder's catalog verification after each file rather than on the
 files themselves, which is the distinction invariant 8 exists to make.
 
-### 8. Block field tampering: Done on Testnet, Partial on Mainnet
+### 8. Block field tampering: Done
 
-The guest rail always derived `status`, `quote_cedis` and `tracking_id` server
-side. The Pioneer rail does now too.
+Both rails derive everything the client must not choose, on both networks.
 
-Creation moved from a client INSERT to `app/api/listings/create`. The server
-owns `posted_by_id`, `posted_by_username`, `status`, `tracking_id` and
-`created_at`, mints the tracking ID against BOTH tables, and refuses the
-`matched_with_*` columns outright. `ListingCreateBody` is strict, so a body
-carrying any server-owned field is a 400 with reason `forbidden_field` rather
-than a value silently dropped, which also closes a column added to this table
-in future on the day it is added.
+The guest rail always did. The Pioneer rail does since creation moved from a
+client INSERT to `app/api/listings/create`: the server owns `posted_by_id`,
+`posted_by_username`, `status`, `tracking_id` and `created_at`, mints the
+tracking ID against BOTH tables, and refuses the `matched_with_*` columns
+outright. `ListingCreateBody` is strict, so a server-owned field in the body is
+a 400 with reason `forbidden_field` rather than a value silently dropped, which
+also closes a column added to this table in future on the day it is added.
 
 The catalog policy `listings_insert_own` pinned `posted_by_id` and one column
-only, because the grant behind it was table wide. The revoke closes the rest.
+only, because the grant behind it was table wide. The revoke closed the rest.
 
-**Testnet: Done.** Verified end to end on 11 September. `GYM-B42CA4` and
-`GYM-9CCB9F` posted in Pi Browser before the migration, the migration applied,
-the column privileges query reading anon and authenticated SELECT on 25
-columns, authenticated UPDATE on 2, INSERT only `postgres` and `service_role`,
-and `GYM-A74042` posted after the revoke.
+**Testnet: verified 11 September.** `GYM-B42CA4` and `GYM-9CCB9F` posted in Pi
+Browser before the migration, the migration applied, the column privileges query
+reading anon and authenticated SELECT on 25 columns and UPDATE on 2 with INSERT
+only `postgres` and `service_role`, and `GYM-A74042` posted after the revoke.
 
-**Mainnet: Partial, and the reason is the grant rather than the code.** The
-code is mirrored at `cd9397b`. `db/migrations/2026-09-11_listings_create_server_side.sql`
-is NOT applied, so `authenticated` still holds table-wide INSERT on `listings`.
-The app no longer sends those five fields; a hand-built PostgREST request with
-the anon key and a session still can.
+**Mainnet: verified 13 September.** `GYM-B5CF11` and `GYM-6A6C61` before,
+`GYM-31D0AF` and `GYM-5EC78B` after, and `role_table_grants` now returning no
+rows for `anon` or `authenticated` on `public.listings`.
 
-**What closes it on Mainnet:** apply that migration, after posting a trip and a
-package in Pi Browser on `gyema8841.pinet.com` to confirm the route carries
-creation while the old path is still there to fall back on. The sequence is in
-the migration.
+The five things a Pioneer could set before this, kept here because they are the
+reason the item existed: a `tracking_id` colliding with a guest job, which
+shadowed that delivery on the public tracker because both trackers resolve
+listings first; `matched_with_user_id` naming a victim, which planted a phantom
+job in their My Activity; `posted_by_username` unconstrained by a policy that
+pins only the id; `status` set to completed at insert; and a future-dated
+`created_at` pinning a row to the top of the open feed.
 
 ### 9. Secure session cookies: N/A
 
@@ -233,7 +232,7 @@ first sign-in of a misconfigured deployment rather than during a build.
 The two networks must not share a salt. That is a hosted fact this repository
 cannot check.
 
-### 11. Rate limit login: Done on Testnet, Partial on Mainnet
+### 11. Rate limit login: Done
 
 `lib/rate-limit.ts` puts a shared Upstash counter in front of `/api/auth/verify`
 and every other route a stranger can reach. Forty per five minutes per address
@@ -251,16 +250,15 @@ control lives in Postgres and a refusal costs a person more than it protects. A
 refused last-4 attempt spends none of the ten a job allows, because the check
 runs before the job is read.
 
-**Testnet: Done**, live with Upstash configured on Production.
+**Both networks: Done.** Live with Upstash configured on Production on each,
+and confirmed on Mainnet by a guest post, `GYM-6E4A4C`, on 13 September that
+exercised both the limiter and Turnstile.
 
 One note on the tracker bucket, since its number was argued partly from a
 predictable ID. Both rails now mint from `randomBytes` (S-17), so a `GYM-` code
 is no longer guessable from prior output, and 120 per 10 minutes is defence in
 depth against scanning rather than the thing standing between a guesser and a
 valid code. The number is unchanged and did not need to change.
-
-**Mainnet: Partial.** Nothing rate limits anything there. Closed by mirroring
-the limits work, which is prepared and not merged.
 
 Two caveats that hold on both networks. Upstash credentials are Production only,
 so preview deployments run with no limiter at all, which is correct for a
@@ -269,7 +267,7 @@ Ghanaian carrier NAT is really a per-carrier-egress limit, which is why every
 per-address number is set well above any plausible cluster of real users and the
 one tight limit is keyed on the sender's own phone number instead.
 
-### 12. Add bot protection: Done on Testnet, Partial on Mainnet
+### 12. Add bot protection: Done
 
 Cloudflare Turnstile on the guest post flow, verified server side in
 `lib/turnstile.ts`. Configuration fails open, so either key missing means the
@@ -292,8 +290,8 @@ Fixed on `fix/turnstile-error-loop`: three consecutive challenge errors, or ten
 seconds after the first error, now falls through to the red panel and the
 prefilled WhatsApp handover.
 
-**Mainnet: Partial.** No Turnstile there. The keys exist on the Vercel project
-and are inert until a deploy bakes the site key in.
+**Mainnet: Done too**, mirrored as PR #32 and confirmed by `GYM-6E4A4C` on
+13 September, which is a guest post that had to solve a challenge to land.
 
 Scoped to guest creation and deliberately not applied to the three last-4
 routes. Those are reached by a sender standing at a door, they already carry
@@ -433,7 +431,7 @@ restart.
 | S-11 raw Pi error echoed to the caller | MEDIUM | Closed |
 | S-12 no caps on guest free text | MEDIUM | Closed. `lib/schemas.ts` |
 | S-14 dispatch reader prints the guard | MEDIUM | Closed. Masked views applied both networks, 7 and 8 September |
-| S-15 client-supplied Pioneer listing fields | MEDIUM | Closed on Testnet, code and revoke both applied. Open on Mainnet until the revoke is applied there. Item 8 |
+| S-15 client-supplied Pioneer listing fields | MEDIUM | Closed on both networks. Code and revoke applied to each, with posts either side of the migration on both. Item 8 |
 | S-16 type and lint errors cannot fail a build | MEDIUM | **Open.** Item 20 |
 | S-17 `Math.random` tracking IDs | MEDIUM | Closed on both rails and both networks. `app/api/listings/create` and `app/api/guest/create` both mint from `randomBytes`; Testnet `66c1c13`, Mainnet `8c6ab27` |
 | S-18 PostgREST filter interpolation | LOW | **Open**, bounded. Item 13 |
@@ -451,6 +449,90 @@ recorded at item 8. What remains unread there is whether `tracking_id` carries a
 unique index.
 
 ---
+
+## Incidents, and what caught them
+
+Two on 13 September, both on Mainnet, both caused by hardening changes rather
+than by the gaps the hardening was for. Recorded because what caught each one
+is more useful than what caused it.
+
+### The envelope enum
+
+**What happened.** A Pioneer could not post a trip. The alert said to check
+their connection and the Vercel log was empty.
+
+The Pioneer forms offer four parcel sizes and the guest form offers three. When
+creation moved behind a schema, both rails were pointed at the three-value enum
+written for the guest rail, so choosing "Envelope / documents" was a 400.
+`lib/listings.ts` had said `PackageSize` included `envelope` the whole time: the
+schema was narrower than the type it described. Creation had been an
+unvalidated client INSERT before that, so the value had always reached the
+column untouched.
+
+**What it cost.** Posting a trip or a package as an envelope was broken on
+Mainnet from roughly 06:41 to 07:40, about an hour. The same bug was live on
+Testnet and nobody had hit it. It cost a morning of diagnosis, most of it spent
+reading an empty log, because the route returned from `parseJsonBody` before
+reaching any `console` call and four of its refusals said nothing at all.
+
+**What caught it.** A person trying to post, then a field-by-field comparison of
+what the form sends against what the schema accepts. No test caught it, because
+the test that would have did not exist.
+
+**What catches it now.** `tests/schemas.test.ts` reads the `SelectItem` values
+out of all three dropdowns and asserts each parses against its own rail's enum.
+It reads the forms rather than restating them, so a test that hardcoded the list
+would have passed on the day this broke. Two named enums, `pioneerPackageSize`
+and `guestPackageSize`, make the next divergence a type error at the call site
+rather than a refusal at runtime.
+
+### The transient-versus-invalid auth conflation
+
+**What happened.** A Pioneer posted a trip at 07:44:07, was refused 401 at
+07:45:16, and posted a package at 07:46:34, on one token with no
+re-authentication between them.
+
+`resolveCaller` collapsed every `getUser` outcome into one null.
+`auth-js` catches inside `getUser` and RETURNS any `AuthError` rather than
+throwing it, and `AuthRetryableFetchError` extends `AuthError`, so a network
+blip, a GoTrue 5xx and a 429 all arrived on the same branch as a genuinely
+expired token. Every one of them told the Pioneer they were not signed in.
+
+**What it cost.** One failed post. The larger cost was that the failure was
+unattributable: a 401 on a healthy session is indistinguishable from a real one
+without the error's status, and the client then blamed the connection, which
+sent the diagnosis in a third direction again.
+
+**What caught it.** The refusal logging added that same morning for the first
+incident. Without it there would have been no line at 07:45:16 and no reason
+string, and the second incident would have looked exactly like the first:
+an empty log and a wrong message. That is the whole argument for logging a
+refusal even when the reason seems obvious at the time.
+
+**What the data then did.** The first hypothesis was that the five-second abort
+in `restoreSessionFromStorage` had left the client holding a token the server
+had replaced, since the abort stops the client waiting but not the server
+finishing. One `auth_events` query killed it: a single verify at 07:43:14
+taking 1481ms, nothing at 07:44 or 07:45. Recorded because the query took
+seconds and the theory was plausible enough to have been built on.
+
+**What catches it now.** `resolveCaller` returns a verdict and classifies the
+error, routes answer 503 for a transient failure and 401 only for a real one,
+and the log carries `name`, `status`, `code` and the classification from one
+place that all twelve authenticated routes go through.
+`tests/route-auth.test.ts` pins the line between the two, in both directions.
+
+### What both have in common
+
+Neither was a security hole. Both were a control refusing correct input, which
+is the failure mode hardening actually produces, and both were invisible in the
+logs at the moment they mattered.
+
+The shared test mock was part of it. `asAnonymousFailure` returned an error with
+no status, a shape GoTrue never sends, and that fiction is why eight tests
+passed while the second bug was live. Fixing the mock broke those eight, which
+is how it was found. A mock that models something the real system cannot produce
+is not a weak test, it is a false one.
 
 ## What a legitimate user meets, worst case
 
@@ -487,27 +569,29 @@ Three deliberate softenings, each costing something and each worth it:
 
 ## Deployment, per network
 
-### Testnet, what is left
+### What is left, and it is the same two items on both networks
 
-Steps 1 through 4 are done. The limits work merged as `534fc71`, the redeploy
-baked the site key, and Turnstile was confirmed rendering and solving in Pi
-Browser and desktop Chrome on 12 September.
+Every migration is applied and catalog verified on both, including the
+2026-09-11 revoke. `docs/deploy-order.md` is a record rather than a plan, and
+nothing outstanding needs a migration window.
 
-1. Merge `fix/turnstile-error-loop`, which closes the spin that first Pi Browser
-   attempt exposed.
-2. Read the console for CSP violations in Pi Browser while the policy is still
-   in report mode. This is the outstanding half of item 18 and nothing else
-   substitutes for it.
-3. Only if that console is silent, set `CSP_ENFORCE=true` and redeploy.
-4. One commit for item 20: dependabot, a Node pin in `.nvmrc` and `engines`, a
+1. **Item 18.** Read the console for CSP violations in Pi Browser while the
+   policy is still in report mode, then set `CSP_ENFORCE=true` only if it is
+   silent. Nothing substitutes for this: `frame-ancestors` is inert when the
+   page is not framed and `connect-src` is never exercised until a real
+   `Pi.authenticate` runs, so the two directives most likely to break sign-in
+   are unreachable from a desktop browser. An earlier version of this policy
+   broke Testnet sign-in after a desktop pass had looked clean.
+2. **Item 20.** One commit: dependabot, a Node pin in `.nvmrc` and `engines`, a
    GitHub Actions workflow, and `npm audit fix`. Fix the three existing type
    errors in the same commit, or the first CI run fails on them, and remove the
    two `ignore` flags in `next.config.mjs` once it passes.
 
-The migrations are not part of this sequence any more. All four are applied and
-catalog verified on both networks, and `docs/deploy-order.md` is now a record of
-that rather than a plan. Nothing on this branch touches the database or needs a
-migration window.
+One companion task with no item attached to it. Check Authentication then Rate
+Limits in the Supabase dashboard on both projects, against roughly one `getUser`
+call per authenticated action per active Pioneer with nothing polling. That
+decides whether the 13 September 401 was a blip or the first sign of a ceiling,
+and it is the one question the new logging cannot answer on its own.
 
 ### Mainnet, second, and only on an explicit go-ahead per change
 
