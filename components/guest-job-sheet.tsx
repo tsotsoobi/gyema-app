@@ -47,8 +47,11 @@ export function GuestJobCard({
               </Badge>
             </div>
           </div>
+          {/* What the courier keeps, not the gross quote: a bare price on the
+              board reads as earnings. The board only lists priced jobs, so the
+              fallback is a guard, not a state a courier should see. */}
           <div className="gyema-gold-gradient rounded-md px-2.5 py-1 text-xs font-bold text-amber-950 whitespace-nowrap">
-            {job.quoteCedis ?? "?"} GHS
+            {job.keepsCedis !== null ? `You keep ${formatCedis(job.keepsCedis)} GHS` : "Not priced"}
           </div>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">

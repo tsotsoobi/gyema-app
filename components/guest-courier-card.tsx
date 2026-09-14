@@ -109,7 +109,14 @@ export function GuestCourierCard({ job }: { job: CourierGuestJob }) {
             muted ? "bg-muted" : "gyema-gold-gradient"
           }`}
         >
-          {job.quoteCedis ?? "?"} GHS
+          {/* What the courier keeps, as recorded at accept. A job with no
+              commission recorded has no keep figure, so the gross quote is
+              shown instead, and labelled as what is collected. */}
+          {job.keepsCedis !== null
+            ? `You keep ${formatCedis(job.keepsCedis)} GHS`
+            : job.quoteCedis !== null
+              ? `Collect ${formatCedis(job.quoteCedis)} GHS`
+              : "Not priced"}
         </div>
       </div>
 
