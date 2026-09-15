@@ -107,9 +107,38 @@
 --        and table_name = 'guest_jobs'
 --        and column_name = 'remit_cedis';
 --
+--     Recorded 15 September: numeric(10,2), nullable, on Testnet and on
+--     Mainnet.
+--
+--     THE TWO AMOUNTS ARE DIFFERENT TYPES. The same pre-flight on Testnet read
+--     quote_cedis as integer. The commission is 7.5 percent of the quote
+--     rounded to the nearest 0.50 cedis, so it routinely carries a fraction
+--     the quote cannot: 5.50 on a 70 quote. Neither column is wrong for what it
+--     holds. But a whole cedi quote_cedis must never be taken as evidence that
+--     remit_cedis is whole too, and anything that compares, subtracts or totals
+--     the two has to treat both as decimals. node-postgres hands integer back
+--     as a number and numeric as a string; scripts/dispatch-reader.mjs reads
+--     both through toAmount, which accepts either. lib/guest-commission.ts
+--     accepts a two decimal quote, which this integer column cannot store, so
+--     on Testnet that path is unreachable from stored data.
+--
 -- (e) Who can read the view. Record every row; section 2 expects the same rows.
---     Expect gyema_reader with SELECT, plus the owner. Nothing else, and in
---     particular no anon, authenticated or PUBLIC.
+--     Expect, and treat as correct:
+--
+--       gyema_reader   SELECT, and only SELECT
+--       postgres       the full owner set: DELETE, INSERT, MAINTAIN,
+--                      REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE
+--       service_role   the same full set as postgres
+--
+--     MAINTAIN exists from Postgres 17; on an older server the set is the
+--     other seven. service_role holding the view is not a finding. The grant
+--     baseline revokes Supabase's default privileges for role postgres from
+--     anon and authenticated only, so a view created after it still gives
+--     service_role everything, which matches that baseline's own section 5
+--     intent. Read on Testnet 15 September, exactly the rows above.
+--
+--     Anything for anon, authenticated or PUBLIC is a finding: stop. Any other
+--     grantee not in the table above: stop and bring it back.
 --
 --     select case when a.grantee = 0 then 'PUBLIC'
 --                 else pg_get_userbyid(a.grantee) end as grantee,
@@ -174,7 +203,8 @@ comment on view public.guest_jobs_dispatch is
 --     reloptions {security_invoker=false}.
 --
 -- (b) Grants unchanged. Rerun 0(e). Expect exactly the rows it returned
---     before: gyema_reader SELECT plus the owner, and nothing else.
+--     before: gyema_reader with SELECT only, and postgres and service_role
+--     each with the full owner set. Nothing for anon, authenticated or PUBLIC.
 --
 -- (c) The column list. Expect 23 rows, remit_cedis at position 23, and columns
 --     1 to 22 exactly as in section 1.

@@ -451,7 +451,18 @@ grant select on public.listings_dispatch   to gyema_reader;
 --        and c.relname in ('guest_jobs_dispatch', 'listings_dispatch')
 --      order by c.relname, grantee;
 --
---     Expect gyema_reader with SELECT, plus the owner. Nothing else.
+--     Expect, per view: gyema_reader with SELECT only, and postgres (the owner)
+--     and service_role each with the full owner set, which from Postgres 17 is
+--     DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE.
+--     Nothing for anon, authenticated or PUBLIC.
+--
+--     CORRECTED 15 September. This line used to read "gyema_reader with SELECT,
+--     plus the owner. Nothing else", which made a correct state read as a
+--     finding. service_role holds the views because the grant baseline revokes
+--     Supabase's default privileges from anon and authenticated only, and these
+--     views are created after it. Confirmed for guest_jobs_dispatch on Testnet
+--     on 15 September. listings_dispatch is created the same way and is
+--     expected to match; it was not read that day.
 --
 -- (g) The old policies are gone. Expect zero rows.
 --
