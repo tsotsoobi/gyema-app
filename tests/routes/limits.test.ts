@@ -79,6 +79,7 @@ const GOOD_JOB = {
   packageSize: "small",
   senderPhone: "0244123456",
   offList: true,
+  declaredValueCedis: 150,
 }
 
 beforeEach(() => {

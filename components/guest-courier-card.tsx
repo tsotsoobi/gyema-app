@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { TONE_BADGE, guestStatusChip } from "@/lib/status-labels"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -30,6 +31,8 @@ const TERMINAL_STATUSES = new Set(["delivered", "cancelled", "expired"])
 
 export function GuestCourierCard({ job }: { job: CourierGuestJob }) {
   const muted = TERMINAL_STATUSES.has(job.status)
+  const statusChip = guestStatusChip(job.status)
+  const statusBadge = TONE_BADGE[statusChip.tone]
   const when = job.whenPref === "date" ? job.scheduledDate : job.whenPref
 
   const [code, setCode] = useState("")
@@ -97,10 +100,14 @@ export function GuestCourierCard({ job }: { job: CourierGuestJob }) {
               Guest delivery
             </Badge>
             <Badge variant="secondary" className="text-[10px]">
-              Phone-verified sender
+              Sender confirmed on WhatsApp
             </Badge>
-            <Badge variant="outline" className="text-[10px]">
-              {job.status}
+            {/* From the shared map (lib/status-labels.ts), never the raw status. */}
+            <Badge
+              variant={statusBadge.variant}
+              className={`text-[10px] ${statusBadge.muted ? "text-muted-foreground" : ""}`}
+            >
+              {statusChip.label}
             </Badge>
           </div>
         </div>

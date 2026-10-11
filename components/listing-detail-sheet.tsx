@@ -13,6 +13,8 @@ import {
 } from "@/components/ui/sheet"
 import { Badge } from "@/components/ui/badge"
 import type { Listing } from "@/lib/listings"
+import { TONE_BADGE, listingStatusChip } from "@/lib/status-labels"
+import { completionMessage } from "@/lib/completion-lines"
 import {
   acceptListingAsync,
   releaseListingAsync,
@@ -504,23 +506,10 @@ export function ListingDetailSheet({
     (role === "sender" && listing.senderConfirmed) ||
     (role === "traveller" && listing.travellerConfirmed)
 
-  // Status pill shown at the top of the sheet
-  const statusBadge = (() => {
-    switch (listing.status) {
-      case "open":
-        return { text: "Open", variant: "secondary" as const }
-      case "matched":
-        return { text: "Matched", variant: "default" as const }
-      case "in_transit":
-        return { text: "In transit", variant: "default" as const }
-      case "completed":
-        return { text: "Completed", variant: "default" as const }
-      case "expired":
-        return { text: "Expired", variant: "outline" as const }
-      default:
-        return { text: listing.status, variant: "secondary" as const }
-    }
-  })()
+  // Status pill shown at the top of the sheet, from the shared map
+  // (lib/status-labels.ts). Never the raw status.
+  const statusChip = listingStatusChip(listing.status)
+  const statusBadge = TONE_BADGE[statusChip.tone]
 
   // Show the inline WhatsApp prompt to outsider Pioneers viewing an open
   // listing who don't yet have a number on file. Guests are excluded
@@ -539,8 +528,11 @@ export function ListingDetailSheet({
       >
         <SheetHeader className="text-left space-y-1 pb-3">
           <div className="flex items-center justify-between">
-            <Badge variant={statusBadge.variant} className="text-xs">
-              {statusBadge.text}
+            <Badge
+              variant={statusBadge.variant}
+              className={`text-xs ${statusBadge.muted ? "text-muted-foreground" : ""}`}
+            >
+              {statusChip.label}
             </Badge>
             <span className="text-xs font-mono text-muted-foreground">
               {listing.trackingId}
@@ -866,9 +858,10 @@ export function ListingDetailSheet({
                 <p className="text-sm font-semibold text-emerald-900">
                   Delivery completed
                 </p>
+                {/* From the two confirmation flags, not the status
+                    (lib/completion-lines.ts). */}
                 <p className="text-xs text-emerald-800">
-                  Both sender and traveller confirmed this delivery as done.
-                  Thanks for moving things across Gyema the safer way.
+                  {completionMessage(listing)}
                 </p>
               </div>
             )}

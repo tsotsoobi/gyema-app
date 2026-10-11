@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/select"
 import { GUEST_AREA_NAMES, quoteCedis } from "@/lib/guest-pricing"
 import { TurnstileWidget } from "@/components/turnstile-widget"
+import { DECLARED_VALUE_CAP_CEDIS } from "@/lib/declared-value"
 
 const GYEMA_WHATSAPP = "233500005780"
 
@@ -48,7 +49,27 @@ function refusalMessage(status: number, reason: unknown): string {
   if (reason === "bot_check_failed") {
     return "The browser check did not pass. Please wait for the box above to tick and try again."
   }
+  // Copy approved 11 Oct 2026 (8.17): both declared value lines (item 7).
+  if (reason === "declared_value_over_cap") {
+    return `During the pilot we can only carry packages worth up to GHS ${DECLARED_VALUE_CAP_CEDIS}.`
+  }
+  if (reason === "invalid_declared_value") {
+    // Also what an older copy of this page gets, since it sends no value.
+    return `Enter the package value in whole cedis, from 0 to ${DECLARED_VALUE_CAP_CEDIS}. If this keeps happening, reload the page.`
+  }
   return "Could not create your delivery. Please check the form and try again."
+}
+
+/**
+ * The declared value as typed, read as whole cedis. Digits only, so a decimal
+ * point, a minus sign or a currency symbol reads as not a number rather than
+ * being quietly rounded or stripped. The cap is checked by the caller, so the
+ * form can tell "too high" apart from "not a number".
+ */
+function parseDeclaredValue(typed: string): number | null {
+  const trimmed = typed.trim()
+  if (!/^[0-9]{1,6}$/.test(trimmed)) return null
+  return Number(trimmed)
 }
 
 export default function SendPage() {
@@ -59,6 +80,7 @@ export default function SendPage() {
   const [dropoffLandmark, setDropoffLandmark] = useState("")
   const [packageSize, setPackageSize] = useState("")
   const [contentsNote, setContentsNote] = useState("")
+  const [declaredValue, setDeclaredValue] = useState("")
   const [recipientName, setRecipientName] = useState("")
   const [recipientPhone, setRecipientPhone] = useState("")
   const [whenPref, setWhenPref] = useState("today")
@@ -86,8 +108,15 @@ export default function SendPage() {
       ? quoteCedis(pickupArea, dropoffArea)
       : null
 
+  // Required on every job, listed and off-list (lib/declared-value.ts).
+  const declaredValueCedis = parseDeclaredValue(declaredValue)
+  const declaredValueOverCap =
+    declaredValueCedis !== null && declaredValueCedis > DECLARED_VALUE_CAP_CEDIS
+  const declaredValueValid = declaredValueCedis !== null && !declaredValueOverCap
+
   const formComplete =
-    pickupArea.trim() && dropoffArea.trim() && packageSize && recipientName && recipientPhone
+    pickupArea.trim() && dropoffArea.trim() && packageSize && recipientName && recipientPhone &&
+    declaredValueValid
 
   const handleSubmit = async () => {
     if (submitting || !senderPhone.trim()) return
@@ -112,6 +141,7 @@ export default function SendPage() {
           paymentType,
           offList,
           turnstileToken,
+          declaredValueCedis,
         }),
       })
       const body = await res.json()
@@ -157,6 +187,8 @@ export default function SendPage() {
       `Dropoff: ${[dropoffArea, dropoffLandmark].filter(Boolean).join(", ") || "not given"}`,
       `Package: ${packageSize || "not given"}`,
       contentsNote ? `Contents: ${contentsNote}` : null,
+      // Copy approved 11 Oct 2026 (8.17), item 7. The operator needs it to post the job by hand.
+      `Value: ${declaredValueCedis !== null ? `GHS ${declaredValueCedis}` : "not given"}`,
       `Recipient: ${[recipientName, recipientPhone].filter(Boolean).join(", ") || "not given"}`,
       `My number: ${senderPhone || "not given"}`,
       whenPref === "date" && scheduledDate ? `When: ${scheduledDate}` : `When: ${whenPref}`,
@@ -293,6 +325,30 @@ export default function SendPage() {
               </p>
             </div>
 
+            {/* Copy approved 11 Oct 2026 (8.17), item 7: label, placeholder,
+                help line and the over-cap line. */}
+            <div className="space-y-1.5">
+              <Label htmlFor="g-value">Value of the package (GHS)</Label>
+              <Input
+                id="g-value"
+                inputMode="numeric"
+                placeholder="e.g. 150"
+                maxLength={6}
+                value={declaredValue}
+                onChange={(e) => setDeclaredValue(e.target.value)}
+              />
+              {declaredValueOverCap ? (
+                <p className="text-xs" style={{ color: "#DC2626" }}>
+                  During the pilot we can only carry packages worth up to GHS {DECLARED_VALUE_CAP_CEDIS}.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Required. During the pilot we carry packages worth up to GHS {DECLARED_VALUE_CAP_CEDIS}. Your
+                  courier does not see this.
+                </p>
+              )}
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="g-rname">Recipient name</Label>
@@ -335,6 +391,10 @@ export default function SendPage() {
             <div className="text-center space-y-1">
               <p className="text-sm text-muted-foreground">
                 {pickupArea} to {dropoffArea}
+              </p>
+              {/* Copy approved 11 Oct 2026 (8.17), item 7. */}
+              <p className="text-xs text-muted-foreground">
+                Declared value: GHS {declaredValueCedis}
               </p>
               {quote !== null ? (
                 <p className="text-3xl font-bold" style={{ color: "#15803D" }}>

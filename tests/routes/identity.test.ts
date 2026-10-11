@@ -115,6 +115,8 @@ describe("every route reads app_metadata, never user_metadata", () => {
 
   it("guest/accept assigns the app_metadata username as courier", async () => {
     mock.asPioneer("pi-real", "real_courier")
+    // A registered full courier (item 6): the registry is looked up first.
+    mock.queueRpc({ data: [{ id: "reg-1", status: "full", buffer_since: null }], error: null })
     // accept reads the quote before it claims.
     mock.queue({ data: { quote_cedis: 40 }, error: null })
     mock.queue({ data: { tracking_id: "GYM-A1B2C3" }, error: null })
@@ -127,6 +129,11 @@ describe("every route reads app_metadata, never user_metadata", () => {
     const update = mock.calls.find((c) => c.method === "update")
     expect((update?.args[0] as Record<string, unknown>).assigned_courier).toBe("real_courier")
     expect(JSON.stringify(update?.args[0])).not.toContain("forged_by_the_user")
+    // And the registry was asked about the app_metadata username, not the forged one.
+    expect(mock.calls.find((c) => c.method === "rpc")?.args).toEqual([
+      "courier_find_pioneer",
+      { p_pi_username: "real_courier" },
+    ])
   })
 
   it("guest/mine matches on the app_metadata username", async () => {

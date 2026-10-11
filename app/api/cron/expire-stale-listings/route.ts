@@ -1,7 +1,8 @@
 // Vercel Cron Job: sweep stale 'open' listings → 'expired'.
 //
-// Runs on the schedule defined in vercel.json (hourly).
-// Uses the admin client to bypass RLS — this is a system maintenance
+// Runs on the schedule defined in vercel.json (daily, 0 0 * * *; Vercel
+// Hobby allows no more than one run a day).
+// Uses the admin client to bypass RLS: this is a system maintenance
 // operation, not a user action, and operates across every Pioneer's
 // listings.
 //
@@ -17,10 +18,10 @@
 
 import { createAdminClient } from "@/lib/supabase-admin"
 
-// Force Node.js runtime — the admin client uses Node crypto.
+// Force Node.js runtime: the admin client uses Node crypto.
 export const runtime = "nodejs"
 
-// Don't cache — every cron tick computes fresh "today" against UTC clock.
+// Don't cache: every cron tick computes fresh "today" against UTC clock.
 export const dynamic = "force-dynamic"
 
 export async function GET(request: Request) {

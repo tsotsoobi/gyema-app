@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createAdminClient } from "@/lib/supabase-admin"
 import { callerRefusalResponse, resolveCaller } from "@/lib/route-auth"
-import { hashDeliveryCode, hashesMatch } from "@/lib/delivery-code"
 import { STAMP_SENDER, STAMP_COURIER_CODE, hasStamp } from "@/lib/delivery-stamps"
 import { verifyLast4 } from "@/lib/last4-guard"
 import { GuestConfirmDeliveryBody, parseJsonBody } from "@/lib/schemas"
 import { checkLimit, ipIdentifier, retryAfterHeaders } from "@/lib/rate-limit"
+import { confirmCourierCode } from "@/lib/guest-claim"
 export const runtime = "nodejs"
 
 // Delivery sign-off for guest jobs (handshake Part 2, closing end).
@@ -21,7 +21,10 @@ export const runtime = "nodejs"
 //   via: "courier_code" the 4-digit delivery code, spoken by the recipient at
 //                       the door. The courier's proof of physical presence.
 //                       Stamps "courier_code". Requires the courier's session
-//                       and a match against assigned_courier.
+//                       and a match against assigned_courier. The whole
+//                       branch is confirmCourierCode in lib/guest-claim.ts,
+//                       shared with the legacy courier's route on the courier
+//                       host, so the five-attempt ceiling is written once.
 //
 // Delivered gating branches on delivery_code_hash nullity:
 //   null      one stamp closes the delivery, exactly as before. Jobs posted
@@ -34,12 +37,6 @@ export const runtime = "nodejs"
 //
 // Idempotent on re-confirm from either side. Never expose sender_phone, any
 // contact field, or delivery_code_hash in any response.
-
-// Wrong-code budget. The fifth wrong entry exhausts it; from then on the
-// courier path refuses outright with a reason distinct from a wrong code, so
-// the UI can stop asking rather than inviting a sixth guess. 4 digits with 5
-// tries is a 1-in-2000 blind guess.
-const MAX_CODE_ATTEMPTS = 5
 
 export async function POST(req: NextRequest) {
   // The shared last-4 bucket, checked before the body is read so both paths
@@ -70,13 +67,43 @@ export async function POST(req: NextRequest) {
   const body = parsed.data
   const { trackingId, via } = body
   const last4 = body.last4 ?? ""
-  const code = body.code ?? ""
 
   const admin = createAdminClient()
+
+  if (via === STAMP_COURIER_CODE) {
+    // Identity is derived server-side from the session token, never from the
+    // body, same as /api/guest/mine. This is not belt-and-braces: without it
+    // anyone holding a tracking ID could spend the courier's five attempts on
+    // wrong guesses and lock the real courier out of their own delivery.
+    //
+    // The caller is resolved before the job is read, so the job is read once,
+    // inside confirmCourierCode. A request with no valid session is refused
+    // here, whatever the job's state.
+    if (!body.accessToken) {
+      return NextResponse.json({ ok: false, reason: "unauthorized" }, { status: 401 })
+    }
+    // resolveCaller now says WHY it refused. A 401 means the caller is not who
+    // they need to be; a 503 means we could not ask Supabase Auth, which is a
+    // different thing and used to be reported as the first one.
+    const verdict = await resolveCaller(admin, body.accessToken)
+    if (!verdict.ok) return callerRefusalResponse(verdict)
+
+    // no_code and not_assigned before any attempt is counted, then the
+    // attempt ceiling, the compare, the idempotent re-confirm and the stamp
+    // under its row lock. Matched on assigned_courier, the Pioneer's
+    // pi_username, as this branch always has been.
+    const result = await confirmCourierCode(admin, {
+      trackingId,
+      code: body.code ?? "",
+      match: { column: "assigned_courier", value: verdict.caller.pi_username },
+    })
+    return NextResponse.json(result.body, { status: result.status })
+  }
+
   const { data, error } = await admin
     .from("guest_jobs")
     .select(
-      "tracking_id, status, sender_phone, assigned_courier, delivery_confirmed_at, delivery_confirmed_by, delivery_code_hash, delivery_code_attempts, last4_attempts"
+      "tracking_id, status, sender_phone, delivery_confirmed_at, delivery_confirmed_by, delivery_code_hash, last4_attempts"
     )
     .eq("tracking_id", trackingId)
     .eq("phone_verified", true)
@@ -91,79 +118,22 @@ export async function POST(req: NextRequest) {
 
   const coded = data.delivery_code_hash !== null
 
-  if (via === STAMP_SENDER) {
-    // Last-4 guard, with the same ten attempt ceiling the other two sender
-    // side routes use (lib/last4-guard.ts). The courier path below has its own
-    // five attempt budget on the code; the two counters are separate, so
-    // burning one does not spend the other.
-    const verdict = await verifyLast4({
-      admin,
-      trackingId,
-      senderPhone: data.sender_phone,
-      attemptsSoFar: data.last4_attempts,
-      last4,
-    })
-    if (!verdict.ok) {
-      return NextResponse.json(
-        { ok: false, reason: verdict.reason, attemptsLeft: verdict.attemptsLeft },
-        { status: verdict.status }
-      )
-    }
-  } else {
-    // Courier path. A job with no code cannot take a courier stamp.
-    if (!coded) {
-      return NextResponse.json({ ok: false, reason: "no_code" }, { status: 409 })
-    }
-
-    // Identity is derived server-side from the session token, never from the
-    // body, same as /api/guest/mine. This is not belt-and-braces: without it
-    // anyone holding a tracking ID could spend the courier's five attempts on
-    // wrong guesses and lock the real courier out of their own delivery.
-    if (!body.accessToken) {
-      return NextResponse.json({ ok: false, reason: "unauthorized" }, { status: 401 })
-    }
-    // resolveCaller now says WHY it refused. A 401 means the caller is not who
-    // they need to be; a 503 means we could not ask Supabase Auth, which is a
-    // different thing and used to be reported as the first one.
-    const verdict = await resolveCaller(admin, body.accessToken)
-    if (!verdict.ok) return callerRefusalResponse(verdict)
-    const caller = verdict.caller
-    if (!data.assigned_courier || data.assigned_courier !== caller.pi_username) {
-      return NextResponse.json({ ok: false, reason: "not_assigned" }, { status: 403 })
-    }
-
-    // Budget check before the compare, so an exhausted job cannot be ground
-    // down by further guessing and a correct code arriving late still refuses.
-    const attempts = data.delivery_code_attempts ?? 0
-    if (attempts >= MAX_CODE_ATTEMPTS) {
-      return NextResponse.json(
-        { ok: false, reason: "code_locked", attemptsLeft: 0 },
-        { status: 403 }
-      )
-    }
-
-    if (!hashesMatch(hashDeliveryCode(code), data.delivery_code_hash)) {
-      // Atomic increment via RPC: a read-modify-write from here would let two
-      // concurrent wrong guesses cost one attempt between them.
-      const { data: bumped, error: bumpErr } = await admin.rpc(
-        "guest_bump_delivery_code_attempts",
-        { p_tracking_id: trackingId }
-      )
-      if (bumpErr) {
-        console.error("[gyema] confirm-delivery attempt bump error:", bumpErr)
-        return NextResponse.json({ ok: false, reason: "update_failed" }, { status: 500 })
-      }
-      const used = typeof bumped === "number" ? bumped : attempts + 1
-      const attemptsLeft = Math.max(0, MAX_CODE_ATTEMPTS - used)
-      return NextResponse.json(
-        {
-          ok: false,
-          reason: attemptsLeft === 0 ? "code_locked" : "wrong_code",
-          attemptsLeft,
-        },
-        { status: 403 }
-      )
-    }
+  // Sender path. Last-4 guard, with the same ten attempt ceiling the other two
+  // sender side routes use (lib/last4-guard.ts). The courier path has its own
+  // five attempt budget on the code; the two counters are separate, so burning
+  // one does not spend the other.
+  const verdict = await verifyLast4({
+    admin,
+    trackingId,
+    senderPhone: data.sender_phone,
+    attemptsSoFar: data.last4_attempts,
+    last4,
+  })
+  if (!verdict.ok) {
+    return NextResponse.json(
+      { ok: false, reason: verdict.reason, attemptsLeft: verdict.attemptsLeft },
+      { status: verdict.status }
+    )
   }
 
   // Idempotent: already signed off by THIS side is a success, not an error.

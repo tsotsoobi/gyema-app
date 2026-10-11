@@ -19,6 +19,7 @@ import {
   type AcceptedGuestJob,
   type OpenGuestJob,
 } from "@/lib/guest-jobs"
+import { acceptRefusalMessage } from "@/lib/guest-accept-message"
 import { getSupabaseSession } from "@/lib/pi-network"
 
 const WHATSAPP_STORAGE_KEY = "gyema_whatsapp"
@@ -43,7 +44,7 @@ export function GuestJobCard({
                 Guest delivery
               </Badge>
               <Badge variant="secondary" className="text-[10px]">
-                Phone-verified sender
+                Sender confirmed on WhatsApp
               </Badge>
             </div>
           </div>
@@ -102,11 +103,11 @@ export function GuestJobSheet({
       accepterWhatsapp: whatsapp.trim(),
     })
     setPending(false)
-    if (!result) {
-      setError("This job is no longer available. Another courier may have taken it.")
+    if (!result.ok) {
+      setError(acceptRefusalMessage(result.reason))
       return
     }
-    setRevealed(result)
+    setRevealed(result.job)
     onAccepted(job.trackingId)
   }
 
@@ -131,7 +132,7 @@ export function GuestJobSheet({
                 Guest delivery
               </Badge>
               <Badge variant="secondary" className="text-[10px]">
-                Phone-verified sender
+                Sender confirmed on WhatsApp
               </Badge>
             </div>
             {/* The courier's split. Every figure came from the server; what the

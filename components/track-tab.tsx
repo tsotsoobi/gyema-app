@@ -14,6 +14,7 @@ import {
   type GuestJobView,
 } from "@/lib/guest-jobs"
 import { DeliveryTracker } from "./delivery-tracker"
+import { completionMessage } from "@/lib/completion-lines"
 
 export function TrackTab() {
   const [trackingId, setTrackingId] = useState("")
@@ -105,9 +106,10 @@ export function TrackTab() {
               <p className="text-sm font-semibold" style={{ color: "#15803D" }}>
                 Delivery completed
               </p>
+              {/* By rail, from the stamps on the row: a guest result never gets
+                  the listing line (lib/completion-lines.ts). */}
               <p className="text-xs" style={{ color: "#166534" }}>
-                Both sender and traveller confirmed this delivery as done.
-                Thanks for moving things across Gyema the safer way.
+                {completionMessage(result)}
               </p>
             </div>
           )}

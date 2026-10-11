@@ -48,6 +48,7 @@ describe("POST /api/guest/create", () => {
         dropoffArea: "Osu",
         packageSize: "small",
         senderPhone: "0244123456",
+        declaredValueCedis: 150,
       }) as never
     )
     expect(res.status).toBe(400)
@@ -61,6 +62,7 @@ describe("POST /api/guest/create", () => {
         dropoffArea: "Anywhere else",
         packageSize: "enormous",
         senderPhone: "0244123456",
+        declaredValueCedis: 150,
         offList: true,
       }) as never
     )
@@ -80,6 +82,7 @@ describe("POST /api/guest/create", () => {
         dropoffArea: "Anywhere else",
         packageSize: "small",
         senderPhone: "0244123456",
+        declaredValueCedis: 150,
         contentsNote: "  a note  ",
         offList: true,
       }) as never
@@ -98,6 +101,100 @@ describe("POST /api/guest/create", () => {
     expect(row.contents_note).toBe("a note")
     // Status is server derived, never taken from the body.
     expect(row.status).toBe("pending_quote")
+  })
+
+  // Item 7: the declared value. Required on every new job, refused above the
+  // pilot cap, written server side, and never sent back (lib/declared-value.ts).
+  describe("declared value", () => {
+    const LISTED = {
+      pickupArea: "Osu",
+      dropoffArea: "Madina",
+      packageSize: "small",
+      senderPhone: "0244123456",
+    }
+    const OFF_LIST = {
+      pickupArea: "Anywhere",
+      dropoffArea: "Anywhere else",
+      packageSize: "small",
+      senderPhone: "0244123456",
+      offList: true,
+    }
+
+    function queueCreate(status: string) {
+      mock.queue(
+        { data: null, error: null },
+        { data: null, error: null },
+        { data: { tracking_id: JOB, status }, error: null }
+      )
+    }
+
+    it("writes it on a listed job, and only reads back the two fields the response uses", async () => {
+      queueCreate("posted")
+      const res = await create.POST(
+        postJson("http://localhost/x", { ...LISTED, declaredValueCedis: 350 }) as never
+      )
+      expect(res.status).toBe(200)
+      const row = mock.calls.find((c) => c.method === "insert")?.args[0] as Record<string, unknown>
+      expect(row.declared_value_cedis).toBe(350)
+      const selects = mock.calls.filter((c) => c.method === "select").map((c) => c.args)
+      expect(selects).toContainEqual(["tracking_id, status"])
+      // No bare select(), which would read the whole row back.
+      expect(selects).not.toContainEqual([])
+    })
+
+    it("writes it on an off-list job too", async () => {
+      queueCreate("pending_quote")
+      const res = await create.POST(
+        postJson("http://localhost/x", { ...OFF_LIST, declaredValueCedis: 0 }) as never
+      )
+      expect(res.status).toBe(200)
+      const row = mock.calls.find((c) => c.method === "insert")?.args[0] as Record<string, unknown>
+      expect(row.declared_value_cedis).toBe(0)
+    })
+
+    it("accepts the cap itself", async () => {
+      queueCreate("posted")
+      const res = await create.POST(
+        postJson("http://localhost/x", { ...LISTED, declaredValueCedis: 500 }) as never
+      )
+      expect(res.status).toBe(200)
+    })
+
+    it("never puts it in the response", async () => {
+      queueCreate("posted")
+      const res = await create.POST(
+        postJson("http://localhost/x", { ...LISTED, declaredValueCedis: 432 }) as never
+      )
+      const text = await res.text()
+      expect(text).not.toContain("432")
+      expect(text).not.toMatch(/declared/i)
+    })
+
+    it("refuses above the cap with its own reason, and writes nothing", async () => {
+      const res = await create.POST(
+        postJson("http://localhost/x", { ...LISTED, declaredValueCedis: 501 }) as never
+      )
+      expect(res.status).toBe(400)
+      expect(await res.json()).toMatchObject({ ok: false, reason: "declared_value_over_cap" })
+      expect(mock.calls).toHaveLength(0)
+    })
+
+    for (const [label, value] of [
+      ["missing", undefined],
+      ["null", null],
+      ["negative", -1],
+      ["fractional", 1.5],
+      ["a string", "150"],
+    ] as const) {
+      it(`refuses a value that is ${label}, and writes nothing`, async () => {
+        const body: Record<string, unknown> = { ...OFF_LIST }
+        if (value !== undefined) body.declaredValueCedis = value
+        const res = await create.POST(postJson("http://localhost/x", body) as never)
+        expect(res.status).toBe(400)
+        expect(await res.json()).toMatchObject({ ok: false, reason: "invalid_declared_value" })
+        expect(mock.calls).toHaveLength(0)
+      })
+    }
   })
 })
 
@@ -149,6 +246,89 @@ describe("GET /api/guest/track", () => {
       expect(selected).not.toContain(forbidden)
     }
   })
+
+  // Item 8, 8.1: courier identity out, courierAssigned in. courierAssigned is
+  // true when assigned_courier IS NOT NULL OR assigned_courier_id IS NOT NULL,
+  // false when both are null, and neither column nor any value from them is
+  // in the response.
+  describe("courierAssigned", () => {
+    const USERNAME = "pioneer_fixture_user"
+    const COURIER_ID = "0b7e3c1a-5d2f-4a8e-9c61-3f2d8e7a9b10"
+
+    async function trackRow(assigned_courier: string | null, assigned_courier_id: string | null) {
+      mock.queue({
+        data: {
+          tracking_id: JOB,
+          pickup_area: "Osu",
+          dropoff_area: "Madina",
+          status: "accepted",
+          created_at: "2026-10-01T00:00:00Z",
+          assigned_courier,
+          assigned_courier_id,
+          pickup_confirmed_at: null,
+          delivery_confirmed_at: null,
+          delivery_confirmed_by: null,
+          delivery_code_hash: null,
+        },
+        error: null,
+      })
+      const res = await track.GET(
+        new NextRequest(`http://localhost/api/guest/track?trackingId=${JOB}`)
+      )
+      expect(res.status).toBe(200)
+      const text = await res.text()
+      return { text, job: JSON.parse(text).job as Record<string, unknown> }
+    }
+
+    function expectNoCourierIdentity(text: string, job: Record<string, unknown>) {
+      expect(text).not.toContain(USERNAME)
+      expect(text).not.toContain(COURIER_ID)
+      expect(job).not.toHaveProperty("assignedCourier")
+      expect(job).not.toHaveProperty("assigned_courier")
+      expect(job).not.toHaveProperty("assigned_courier_id")
+      expect(job).not.toHaveProperty("assignedCourierId")
+    }
+
+    it("is true on a Pioneer row claimed after item 6 (both columns set), with no username or id", async () => {
+      const { text, job } = await trackRow(USERNAME, COURIER_ID)
+      expect(job.courierAssigned).toBe(true)
+      expectNoCourierIdentity(text, job)
+    })
+
+    it("is true on a Pioneer row claimed before item 6 (assigned_courier set, assigned_courier_id null), with no username", async () => {
+      const { text, job } = await trackRow(USERNAME, null)
+      expect(job.courierAssigned).toBe(true)
+      expectNoCourierIdentity(text, job)
+    })
+
+    it("is true on a legacy row (assigned_courier null, assigned_courier_id set), with no id", async () => {
+      const { text, job } = await trackRow(null, COURIER_ID)
+      expect(job.courierAssigned).toBe(true)
+      expectNoCourierIdentity(text, job)
+    })
+
+    it("is false when assigned_courier and assigned_courier_id are both null", async () => {
+      const { text, job } = await trackRow(null, null)
+      expect(job.courierAssigned).toBe(false)
+      expectNoCourierIdentity(text, job)
+    })
+
+    it("selects assigned_courier and assigned_courier_id by name, never a bare or star select", async () => {
+      await trackRow(null, null)
+      const selected = mock.selectedColumns()
+      expect(selected).toMatch(/\bassigned_courier\b/)
+      expect(selected).toContain("assigned_courier_id")
+      const selects = mock.calls.filter((c) => c.method === "select").map((c) => c.args)
+      expect(selects).not.toContainEqual([])
+      expect(selected).not.toContain("*")
+    })
+
+    it("pins in source that the route emits no courier field", () => {
+      const src = readFileSync("app/api/guest/track/route.ts", "utf8")
+      expect(src).not.toMatch(/assignedCourier\s*:/)
+      expect(src).not.toMatch(/:\s*data\.assigned_courier(_id)?\s*,/)
+    })
+  })
 })
 
 describe("GET /api/guest/open", () => {
@@ -166,6 +346,16 @@ describe("GET /api/guest/open", () => {
     const selected = mock.selectedColumns()
     expect(selected).not.toContain("sender_phone")
     expect(selected).not.toContain("delivery_code_hash")
+  })
+
+  // Item 6: a legacy claim leaves assigned_courier null, so unassigned means
+  // both columns null.
+  it("leaves a job a legacy courier claimed off the board", async () => {
+    mock.queue({ data: [], error: null })
+    await open.GET(get("http://localhost/api/guest/open") as never)
+    const trace = mock.trace()
+    expect(trace).toContain('is("assigned_courier", null)')
+    expect(trace).toContain('is("assigned_courier_id", null)')
   })
 
   // Off-list option (a): accept refuses a job with no quote, so the board
@@ -192,7 +382,23 @@ describe("GET /api/guest/open", () => {
   })
 })
 
+/** courier_find_pioneer's answer for a registered courier: one row, as PostgREST returns a table. */
+function registry(row: Record<string, unknown>) {
+  return {
+    data: [{ id: "reg-1", buffer_since: null, paused_reason: null, kyc_approved_at: null, vouched_at: null, ...row }],
+    error: null,
+  }
+}
+
+const FULL = registry({ status: "full", vouched_at: "2026-10-10T09:00:00Z" })
+
 describe("POST /api/guest/accept", () => {
+  // Every Pioneer below is a registered full courier (item 6, decision A), so
+  // the behaviour before the ladder stays pinned for exactly that courier.
+  beforeEach(() => {
+    mock.queueRpc(FULL)
+  })
+
   it("rejects an unresolvable session token", async () => {
     const res = await accept.POST(
       postJson("http://localhost/x", { accessToken: "bad", trackingId: JOB }) as never
@@ -341,6 +547,197 @@ describe("POST /api/guest/accept", () => {
   })
 })
 
+describe("POST /api/guest/accept: the courier registry and the ladder (item 6)", () => {
+  const body = () => postJson("http://localhost/x", { accessToken: "good", trackingId: JOB }) as never
+  const DAY = 24 * 60 * 60 * 1000
+  const daysAgo = (n: number) => new Date(Date.now() - n * DAY).toISOString()
+
+  function updates() {
+    return mock.calls.filter((c) => c.method === "update")
+  }
+
+  it("looks the courier up by the session's pi_username, and by nothing in the body", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    mock.queueRpc(FULL)
+    mock.queue({ data: { quote_cedis: 40 }, error: null }, { data: { tracking_id: JOB }, error: null })
+    await accept.POST(
+      postJson("http://localhost/x", {
+        accessToken: "good",
+        trackingId: JOB,
+        pi_username: "someone_else",
+        courierId: "reg-forged",
+        tier: "full",
+      }) as never
+    )
+    const rpc = mock.calls.filter((c) => c.method === "rpc")
+    expect(rpc).toHaveLength(1)
+    expect(rpc[0].args).toEqual(["courier_find_pioneer", { p_pi_username: "courier_one" }])
+    expect(mock.trace().join(" ")).not.toContain("someone_else")
+    expect(mock.trace().join(" ")).not.toContain("reg-forged")
+  })
+
+  it("does not look anyone up for an unresolvable token", async () => {
+    const res = await accept.POST(body())
+    expect(res.status).toBe(401)
+    expect(mock.calls.some((c) => c.method === "rpc")).toBe(false)
+  })
+
+  it("answers 503 auth_unavailable on a lookup error, never falling through to no row, and reads nothing", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    mock.queueRpc({ data: null, error: { code: "PGRST202", message: "function not found" } })
+    const res = await accept.POST(body())
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({ ok: false, reason: "auth_unavailable" })
+    expect(mock.calls.some((c) => c.method === "from")).toBe(false)
+  })
+
+  it("answers 503 when the lookup returns something that is not a table, or more than one row", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    mock.queueRpc({ data: { id: "reg-1", status: "full" }, error: null })
+    expect((await accept.POST(body())).status).toBe(503)
+    mock.queueRpc({ data: [{ id: "a", status: "full" }, { id: "b", status: "full" }], error: null })
+    expect((await accept.POST(body())).status).toBe(503)
+    expect(mock.calls.some((c) => c.method === "from")).toBe(false)
+  })
+
+  it("refuses a Pioneer with no registry row: 403 courier_not_registered, nothing read or written", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    mock.queueRpc({ data: [], error: null })
+    const res = await accept.POST(body())
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ ok: false, reason: "courier_not_registered" })
+    expect(mock.calls.some((c) => c.method === "from")).toBe(false)
+  })
+
+  it("treats a null lookup result as no row, never as registered", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    mock.queueRpc({ data: null, error: null })
+    const res = await accept.POST(body())
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({ reason: "courier_not_registered" })
+  })
+
+  const notActive: Array<[string, Record<string, unknown>]> = [
+    ["registered", { status: "registered" }],
+    ["paused", { status: "paused", paused_reason: "operator" }],
+    ["buffer with no buffer_since", { status: "buffer", buffer_since: null }],
+    ["buffer for 30 days", { status: "buffer", buffer_since: daysAgo(30) }],
+    ["unknown-status", { status: "gold" }],
+  ]
+  for (const [label, row] of notActive) {
+    it(`refuses a ${label} courier: 403 courier_not_active, nothing read or written`, async () => {
+      mock.asPioneer("pi-uid-1", "courier_one")
+      mock.queueRpc(registry(row))
+      const res = await accept.POST(body())
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ ok: false, reason: "courier_not_active" })
+      expect(mock.calls.some((c) => c.method === "from")).toBe(false)
+    })
+  }
+
+  it("writes the registry id beside the username, and guards the read and the claim on both columns null", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    mock.queueRpc(registry({ id: "reg-77", status: "full" }))
+    mock.queue({ data: { quote_cedis: 40 }, error: null }, { data: { tracking_id: JOB }, error: null })
+    const res = await accept.POST(body())
+    expect(res.status).toBe(200)
+    const row = updates()[0].args[0] as Record<string, unknown>
+    expect(row.assigned_courier).toBe("courier_one")
+    expect(row.assigned_courier_id).toBe("reg-77")
+    expect(row.status).toBe("accepted")
+    const trace = mock.trace()
+    const updateAt = trace.findIndex((t) => t.startsWith("update("))
+    // Once on the read, once on the claim.
+    expect(trace.filter((t) => t === 'is("assigned_courier_id", null)')).toHaveLength(2)
+    expect(trace.lastIndexOf('is("assigned_courier_id", null)')).toBeGreaterThan(updateAt)
+    expect(trace.lastIndexOf('is("assigned_courier", null)')).toBeGreaterThan(updateAt)
+  })
+
+  it("adds no buffer guard and no extra read for a full courier", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    mock.queueRpc(FULL)
+    mock.queue({ data: { quote_cedis: 40 }, error: null }, { data: { tracking_id: JOB }, error: null })
+    await accept.POST(body())
+    const trace = mock.trace()
+    expect(trace.filter((t) => t.startsWith("from("))).toHaveLength(2)
+    expect(trace.some((t) => t.startsWith("in(") || t.startsWith("lte("))).toBe(false)
+  })
+
+  it("claims for a buffer courier inside 30 days, with the buffer guards in the claim UPDATE itself", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    mock.queueRpc(registry({ status: "buffer", buffer_since: daysAgo(29) }))
+    mock.queue(
+      { data: { quote_cedis: 40 }, error: null },
+      { data: { tracking_id: JOB }, error: null }, // the eligibility read
+      { data: { tracking_id: JOB }, error: null } // the claim
+    )
+    const res = await accept.POST(body())
+    expect(res.status).toBe(200)
+    const trace = mock.trace()
+    const after = trace.slice(trace.findIndex((t) => t.startsWith("update(")))
+    expect(after.some((t) => t.startsWith('in("pickup_area", ['))).toBe(true)
+    expect(after.some((t) => t.startsWith('in("dropoff_area", ['))).toBe(true)
+    expect(after).toContain('lte("declared_value_cedis", 200)')
+    // The bounded list, exact names: an untrimmed off-list value is not on it.
+    const areas = mock.calls.find((c) => c.method === "in" && c.args[0] === "pickup_area")?.args[1] as string[]
+    expect(areas).toContain("Osu")
+    expect(areas).not.toContain("Asylum down ")
+  })
+
+  it("refuses a buffer courier on a job outside the guards: 403 not_eligible, one reason, nothing written", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    mock.queueRpc(registry({ status: "buffer", buffer_since: daysAgo(1) }))
+    mock.queue({ data: { quote_cedis: 40 }, error: null }, { data: null, error: null })
+    const res = await accept.POST(body())
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ ok: false, reason: "not_eligible" })
+    expect(updates()).toHaveLength(0)
+    // The eligibility read carries the guards and selects only the id.
+    const trace = mock.trace()
+    expect(trace).toContain('lte("declared_value_cedis", 200)')
+    expect(trace).toContain('select("tracking_id")')
+  })
+
+  it("answers not_open, not not_eligible, to a buffer courier on a job that is not open", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    mock.queueRpc(registry({ status: "buffer", buffer_since: daysAgo(1) }))
+    mock.queue({ data: null, error: null })
+    const res = await accept.POST(body())
+    expect(await res.json()).toMatchObject({ ok: false, reason: "not_open" })
+    expect(updates()).toHaveLength(0)
+  })
+
+  it("answers not_open to a buffer courier who passed the guards and then lost the claim", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    mock.queueRpc(registry({ status: "buffer", buffer_since: daysAgo(1) }))
+    mock.queue(
+      { data: { quote_cedis: 40 }, error: null },
+      { data: { tracking_id: JOB }, error: null },
+      { data: null, error: { code: "PGRST116", message: "no rows" } }
+    )
+    const res = await accept.POST(body())
+    expect(await res.json()).toMatchObject({ ok: false, reason: "not_open" })
+  })
+
+  it("never selects or returns the declared value, for either tier", async () => {
+    for (const row of [FULL, registry({ status: "buffer", buffer_since: daysAgo(0) })]) {
+      mock.calls = []
+      mock.results = []
+      mock.asPioneer("pi-uid-1", "courier_one")
+      mock.queueRpc(row)
+      mock.queue(
+        { data: { quote_cedis: 40 }, error: null },
+        { data: { tracking_id: JOB }, error: null },
+        { data: { tracking_id: JOB }, error: null }
+      )
+      const res = await accept.POST(body())
+      expect(res.status).toBe(200)
+      expect(mock.selectedColumns()).not.toMatch(/declared/i)
+      expect(await res.text()).not.toMatch(/declared/i)
+    }
+  })
+})
+
 describe("POST /api/guest/mine", () => {
   it("rejects a request with no token", async () => {
     const res = await mine.POST(postJson("http://localhost/x", {}) as never)
@@ -389,6 +786,57 @@ describe("POST /api/guest/mine", () => {
     for (const hidden of ["remit_pi", "remit_rate", "remit_method", "remit_paid_at", "remit_ref"]) {
       expect(selected).not.toContain(hidden)
     }
+  })
+
+  // Item 6, 6.5: a cancelled job keeps no recipient contact on the courier's
+  // screen. Every other status shows them, expired included (decision 5).
+  it("withholds the recipient's name and phone on a cancelled job, and only there", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    const statuses = ["posted", "accepted", "in_transit", "delivered", "expired", "cancelled"]
+    mock.queue({
+      data: statuses.map((status, i) => ({
+        tracking_id: `GYM-00000${i}`,
+        status,
+        recipient_name: "Ama",
+        recipient_phone: "0244999888",
+        pickup_landmark: "Blue gate",
+        delivery_code_hash: null,
+      })),
+      error: null,
+    })
+    const res = await mine.POST(postJson("http://localhost/x", { accessToken: "good" }) as never)
+    const { jobs } = await res.json()
+    expect(jobs).toHaveLength(statuses.length)
+    for (const job of jobs) {
+      if (job.status === "cancelled") {
+        expect(job.recipientName, job.status).toBeNull()
+        expect(job.recipientPhone, job.status).toBeNull()
+      } else {
+        expect(job.recipientName, job.status).toBe("Ama")
+        expect(job.recipientPhone, job.status).toBe("0244999888")
+      }
+      // Landmarks are not part of the rule (deferred to a later privacy pass).
+      expect(job.pickupLandmark, job.status).toBe("Blue gate")
+    }
+    // A response rule only: nothing is written.
+    expect(mock.calls.some((c) => c.method === "update")).toBe(false)
+  })
+
+  it("does not consult the courier registry, so a paused Pioneer still sees their jobs", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    mock.queue({ data: [], error: null })
+    const res = await mine.POST(postJson("http://localhost/x", { accessToken: "good" }) as never)
+    expect(res.status).toBe(200)
+    expect(mock.calls.some((c) => c.method === "rpc")).toBe(false)
+    expect(mock.trace()).toContain('eq("assigned_courier", "courier_one")')
+    expect(mock.selectedColumns()).not.toMatch(/declared/i)
+  })
+
+  it("answers 500 on a read error", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    mock.queue({ data: null, error: { code: "XX000", message: "boom" } })
+    const res = await mine.POST(postJson("http://localhost/x", { accessToken: "good" }) as never)
+    expect(res.status).toBe(500)
   })
 })
 
@@ -572,6 +1020,41 @@ describe("POST /api/guest/confirm-delivery", () => {
       "guest_bump_delivery_code_attempts"
     )
   })
+
+  // Item 6 part (c): the courier branch is confirmCourierCode, matched on
+  // assigned_courier. A job a legacy courier claimed carries only
+  // assigned_courier_id, so no Pioneer can stamp it, and no attempt is spent.
+  it("refuses a Pioneer on a legacy-claimed job, before any attempt is counted", async () => {
+    mock.asPioneer("pi-uid-1", "courier_one")
+    mock.queue({
+      data: {
+        tracking_id: JOB,
+        status: "in_transit",
+        assigned_courier: null,
+        assigned_courier_id: "0f1e2d3c-4b5a-4968-8776-655443322110",
+        delivery_confirmed_at: null,
+        delivery_confirmed_by: null,
+        delivery_code_hash: "hash",
+        delivery_code_attempts: 0,
+      },
+      error: null,
+    })
+    const res = await confirmDelivery.POST(
+      postJson("http://localhost/x", { trackingId: JOB, via: "courier_code", code: "1234", accessToken: "good" }) as never
+    )
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({ reason: "not_assigned" })
+    expect(mock.calls.filter((c) => c.method === "rpc")).toEqual([])
+  })
+
+  it("resolves the caller before it reads the job on the courier code path", async () => {
+    mock.asAnonymousFailure()
+    const res = await confirmDelivery.POST(
+      postJson("http://localhost/x", { trackingId: JOB, via: "courier_code", code: "1234", accessToken: "bad" }) as never
+    )
+    expect(res.status).toBe(401)
+    expect(mock.calls.filter((c) => c.method === "from")).toEqual([])
+  })
 })
 
 // Finding S-17, the guest half. The Pioneer rail moved to randomBytes when
@@ -591,6 +1074,7 @@ describe("the tracking id the guest rail mints", () => {
         dropoffArea: "Anywhere else",
         packageSize: "small",
         senderPhone: "0244123456",
+        declaredValueCedis: 150,
         offList: true,
       }) as never
     )
@@ -619,6 +1103,7 @@ describe("the tracking id the guest rail mints", () => {
           dropoffArea: "Anywhere else",
           packageSize: "small",
           senderPhone: "0244123456",
+          declaredValueCedis: 150,
           offList: true,
         }) as never
       )

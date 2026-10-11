@@ -34,6 +34,9 @@ export async function GET(request: NextRequest) {
       .eq("phone_verified", true)
       .eq("status", "posted")
       .is("assigned_courier", null)
+      // Unassigned means both columns null: a legacy claim leaves
+      // assigned_courier null and sets assigned_courier_id (item 6, 6.1).
+      .is("assigned_courier_id", null)
       .gt("quote_cedis", 0)
       .order("created_at", { ascending: false })
       .limit(20)

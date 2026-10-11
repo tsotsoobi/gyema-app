@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { TONE_BADGE, listingStatusChip } from "@/lib/status-labels"
 import { type Listing } from "@/lib/listings"
 import { getListingsByUserAsync, archiveListingAsync } from "@/lib/listings-async"
 import { isGuest, type PiUser, type UserRole } from "@/lib/pi-network"
@@ -258,6 +259,8 @@ function ListingCard({
   muted: boolean
   onOpen: () => void
 }) {
+  const chip = listingStatusChip(listing.status)
+  const badge = TONE_BADGE[chip.tone]
   return (
     <Card
       onClick={onOpen}
@@ -281,13 +284,16 @@ function ListingCard({
         >
           {listing.fromCity} → {listing.toCity}
         </p>
+        {/* From the shared map (lib/status-labels.ts), never the raw status.
+            Muted text only on an outline chip: on a filled one it would lose
+            contrast, and the row's opacity already mutes past rows. */}
         <Badge
-          variant="outline"
+          variant={badge.variant}
           className={`text-[10px] ${
-            muted ? "text-muted-foreground" : ""
+            (badge.muted || muted) && badge.variant === "outline" ? "text-muted-foreground" : ""
           }`}
         >
-          {listing.status}
+          {chip.label}
         </Badge>
       </div>
       <p className="text-xs text-muted-foreground line-clamp-2">

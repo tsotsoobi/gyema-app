@@ -210,6 +210,40 @@ export function buildCsp(nonce: string): string {
 }
 
 /**
+ * The policy for the courier host (lib/courier-host.ts).
+ *
+ * No Pi origin anywhere: the courier host never loads the Pi SDK, so there is
+ * nothing for one to admit, and a policy that named them would let a stray
+ * SDK tag run. Nobody frames this surface either. It is opened in an ordinary
+ * browser, so frame-ancestors is 'none' rather than the Pi Browser list;
+ * middleware also sends X-Frame-Options: DENY here.
+ *
+ * ALWAYS ENFORCED. middleware.ts sends this policy as
+ * Content-Security-Policy whatever CSP_ENFORCE says; the flag governs the
+ * Pioneer surface only (founder decision, 8 Oct 2026).
+ *
+ * No Turnstile yet. Phase 1 item 5 adds it here if the code sign-in uses it.
+ */
+export function buildCourierCsp(nonce: string): string {
+  return [
+    `default-src 'self'`,
+    `script-src 'self' 'nonce-${nonce}'`,
+    // Same reason as the main policy: the layout's font style block and
+    // Tailwind's runtime styles.
+    `style-src 'self' 'unsafe-inline'`,
+    `img-src 'self' data: blob:`,
+    `font-src 'self' data:`,
+    `connect-src 'self' ${SUPABASE_HTTPS} ${SUPABASE_WSS}`,
+    `frame-src 'none'`,
+    `child-src 'none'`,
+    `frame-ancestors 'none'`,
+    `form-action 'self'`,
+    `base-uri 'self'`,
+    `object-src 'none'`,
+  ].join("; ")
+}
+
+/**
  * Which header name to send.
  *
  * CSP_ENFORCE=true sends Content-Security-Policy, which blocks.

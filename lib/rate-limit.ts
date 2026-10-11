@@ -229,6 +229,90 @@ export const LIMITS = {
    * real person will never meet it.
    */
   guest_last4: { limit: 120, window: "1 h", onError: "open" },
+
+  /**
+   * Courier sign-in, per IP (Phase 1 item 5, 5.2).
+   *
+   * Ten per fifteen minutes. A courier types one code, sometimes twice. This
+   * is weak under carrier-grade NAT, like every per-IP number here, and it is
+   * not the control: the courier types only a code, so a wrong guess cannot
+   * be pinned on a courier and there is no per-courier lockout. The control
+   * is code entropy, 50 bits, single use, 15 minutes. Checked before the body
+   * is parsed, so malformed bodies are limited too.
+   *
+   * Fails CLOSED: a sign-in refused while Redis is down costs a courier a
+   * retry, and an unlimited guessing window costs more.
+   */
+  courier_signin_ip: { limit: 10, window: "15 m", onError: "closed" },
+
+  /**
+   * Courier sign-in, everyone together, keyed on the constant "all".
+   *
+   * Three hundred an hour, a circuit breaker on database load that caps
+   * guessing at 7,200 a day. The trade is accepted (founder decision 7):
+   * anyone can exhaust it and block every courier's sign-in for up to an
+   * hour. Sign-in is rare under 90-day sessions, and a signed-in courier is
+   * unaffected. Checked after the body is parsed, just before the database
+   * call, so only a well-formed code spends it. Fails closed.
+   */
+  courier_signin_global: { limit: 300, window: "1 h", onError: "closed" },
+
+  /**
+   * The courier's status card, per courier id.
+   *
+   * Sixty per ten minutes. The page reads it on load and after sign-in, a
+   * handful of times in a session, so sixty is far above real use. Keyed on the
+   * courier the session resolved to, so it runs after resolveCourier. Fails
+   * OPEN: it is a read of the courier's own row, and refusing it would show a
+   * signed-in courier an error for no protection.
+   *
+   * POST /api/courier/jobs/mine spends the same bucket (item 6, 6.10 decision
+   * 7): another read of the courier's own rows, on the same page load.
+   */
+  courier_me: { limit: 60, window: "10 m", onError: "open" },
+
+  /**
+   * POST /api/courier/kyc/start, per courier id (5.2, 5.4).
+   *
+   * Ten a day (founder decision, 9 Oct 2026, raised from three). Every call
+   * past resolveCourier spends it, a refusal included, because every one
+   * that is not refused makes an outbound PiVerify call: a create, or a
+   * re-fetch of the bound session. Ten, because a Continue verification
+   * re-fetch costs nothing, creates are already bounded by the bound-session
+   * rule, the idempotency key and the bind, and a courier on unreliable
+   * mobile data must not be locked out mid-flow. PiVerify answers 429 when
+   * called too often. A credit is charged only at pending_review, so this
+   * is not a billing control. Fails CLOSED: each call is an outbound call.
+   */
+  courier_kyc_start: { limit: 10, window: "1 d", onError: "closed" },
+
+  /**
+   * POST /api/courier/kyc/refresh, per courier id (5.4, the poll).
+   *
+   * Two a minute. The page polls once on load while the result is unsettled
+   * and every 60 seconds while the waiting screen is open. Fails CLOSED: each
+   * poll is an outbound call, and a refused poll costs only a minute.
+   */
+  courier_kyc_refresh: { limit: 2, window: "1 m", onError: "closed" },
+
+  /**
+   * POST /api/courier/jobs/accept, per courier id (item 6, 6.4).
+   *
+   * Thirty per ten minutes. A courier taps accept on a job they want, and a
+   * miss on a job someone else took first is a tap or two more. Fails CLOSED:
+   * accept is a status write, and a claim refused while Redis is down costs a
+   * courier a retry.
+   */
+  courier_accept: { limit: 30, window: "10 m", onError: "closed" },
+
+  /**
+   * POST /api/courier/jobs/confirm-delivery, per courier id (6.3).
+   *
+   * Thirty an hour. Fails OPEN, for guest_last4's reason: the five-attempt
+   * ceiling per job in Postgres is the control, and a courier at a door must
+   * not be refused because a cache is down.
+   */
+  courier_confirm: { limit: 30, window: "1 h", onError: "open" },
 } satisfies Record<string, LimitSpec>
 
 export type LimitName = keyof typeof LIMITS

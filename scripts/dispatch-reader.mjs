@@ -47,12 +47,27 @@
 // No secret lives in this repo. The connection string is read from the
 // environment variable GYEMA_READER_DATABASE_URL, which belongs in a
 // gitignored .env.local or in the shell, and which authenticates as
-// gyema_reader: SELECT on public.guest_jobs_dispatch and
-// public.listings_dispatch, and nothing else. Not on the base tables, so
-// delivery_code_hash and the raw phone columns are unreachable from here even
+// gyema_reader: SELECT on public.guest_jobs_dispatch,
+// public.listings_dispatch and public.courier_registry_dispatch, and nothing
+// else. Not on the base tables, so delivery_code_hash, the raw phone columns
+// and every identifying courier_registry column are unreachable from here even
 // by mistake. Of the remit_* settlement columns, the view carries exactly two:
 // remit_paid_at, and remit_cedis, the commission accept records. remit_pi,
 // remit_rate, remit_method and remit_ref are not in it.
+//
+// COURIERS
+//
+// A job is assigned when either assignment column is set. A Pioneer claim
+// writes assigned_courier (the pi_username) and, from item 6 on,
+// assigned_courier_id. A legacy claim writes assigned_courier_id alone, so a
+// check keyed on assigned_courier would never see a legacy job. A courier is
+// shown by the courier_ref that public.courier_registry_dispatch carries, the
+// first 8 characters of the registry id
+// (db/migrations/2026-10-10_courier_registry_dispatch_view.sql). The full
+// assigned_courier_id is read only to find that row and is never printed.
+//
+// declared_value_cedis is shown to the operator here and nowhere a courier
+// can see (docs/anchoring-phase1-notes.md, 7.7 decision 3).
 //
 // GYEMA_READER_CA_CERT is also required, and is the path to the project CA
 // certificate. The connection is refused without it: see the TLS block in
@@ -88,11 +103,65 @@ import pg from "pg"
 
 const { Client } = pg
 
-// The one hard stop in the guest rail, kept in step with
-// app/api/guest/confirm-delivery/route.ts MAX_CODE_ATTEMPTS. At this count
-// the route returns code_locked and the courier cannot try again, so the
-// report says locked because the code says locked.
-const MAX_CODE_ATTEMPTS = 5
+// ---------------------------------------------------------------------------
+// Figures read from the application source, not restated here
+//
+// This file cannot import lib/*.ts: it is plain Node, and those modules are
+// TypeScript importing through the @/ alias. So each figure below is read
+// from its one definition as text, at load, and the script refuses to start
+// unless that file holds exactly one "export const NAME = <integer>" line and
+// no other assignment to NAME. A copy kept here would drift silently; a
+// changed definition this cannot parse stops the script instead.
+// ---------------------------------------------------------------------------
+const REPO_ROOT = new URL("../", import.meta.url)
+
+function parseSharedConstant(source, name, file) {
+  const definitions = [...source.matchAll(new RegExp(`^export const ${name} = (\\d+)\\b`, "gm"))]
+  const assignments = source.match(new RegExp(`\\b${name}\\s*=(?!=)`, "g")) ?? []
+  if (definitions.length !== 1 || assignments.length !== 1) {
+    throw new Error(
+      `[dispatch-reader] refused to start: expected exactly one "export const ${name} = <integer>" in ${file}, ` +
+        `found ${definitions.length} such line(s) and ${assignments.length} assignment(s) to ${name}. ` +
+        "The report reads this figure from that file and keeps no copy of its own."
+    )
+  }
+  return Number(definitions[0][1])
+}
+
+function loadSharedConstant(file, name) {
+  let source
+  try {
+    source = readFileSync(new URL(file, REPO_ROOT), "utf8")
+  } catch (err) {
+    throw new Error(`[dispatch-reader] refused to start: could not read ${file} for ${name}: ${err.message}`)
+  }
+  return parseSharedConstant(source, name, file)
+}
+
+// The one hard stop in the guest rail. At this count confirmCourierCode in
+// lib/guest-claim.ts, which both confirm routes call, returns code_locked and
+// the courier cannot try again, so the report says locked because the code
+// says locked.
+const MAX_CODE_ATTEMPTS = loadSharedConstant("lib/guest-claim.ts", "MAX_CODE_ATTEMPTS")
+
+// The buffer window of effectiveTier in lib/courier-ladder.ts. At or past it
+// a buffer courier is refused every job, computed on read; the stored status
+// is changed by hand (decision 7), and section 10 lists who is due.
+const BUFFER_WINDOW_DAYS = loadSharedConstant("lib/courier-ladder.ts", "BUFFER_WINDOW_DAYS")
+
+// Section 11 threshold, in hours: an unsettled PiVerify session untouched for
+// this long is listed so the founder can nudge the courier
+// (docs/anchoring-phase1-notes.md, 5.4). A notes figure, not a code one, so
+// it lives here.
+const STALE_SESSION_HOURS = 24
+
+// The PiVerify statuses that are always unsettled: the session is still
+// moving and a poll may learn something. The fourth case of isUnsettled in
+// app/courier/courier-panel.tsx is a rejected session that still carries a
+// piverify_allowed_action, a resubmission or an appeal; section 11 adds it as
+// its own arm. A rejected session with no allowed action is final, so settled,
+// and is not listed.
+const UNSETTLED_PIVERIFY_STATUSES = ["created", "started", "pending_review"]
 
 // Section 3 staleness threshold, in hours.
 const POSTED_STALE_HOURS = 24
@@ -203,6 +272,10 @@ const REQUIRED_COLUMNS = {
     "delivery_code_attempts",
     "remit_paid_at",
     "remit_cedis",
+    // P14, db/migrations/2026-10-09_dispatch_view_courier_id.sql, columns 24
+    // and 25.
+    "assigned_courier_id",
+    "declared_value_cedis",
   ],
   listings_dispatch: [
     "tracking_id",
@@ -214,7 +287,38 @@ const REQUIRED_COLUMNS = {
     "posted_by_username",
     "archived_at",
   ],
+  // P15, db/migrations/2026-10-10_courier_registry_dispatch_view.sql, all
+  // nine of its columns. There is no other courier column to read.
+  courier_registry_dispatch: [
+    "courier_ref",
+    "class",
+    "status",
+    "buffer_since",
+    "piverify_status",
+    "piverify_status_at",
+    "paused_reason",
+    "shredded_at",
+    "piverify_allowed_action",
+  ],
 }
+
+// Which migration adds each column a preflight can find missing, so the
+// failure names the file to apply rather than leaving it to be worked out.
+const COLUMN_SOURCES = [
+  {
+    test: (name) =>
+      name === "guest_jobs_dispatch.assigned_courier_id" || name === "guest_jobs_dispatch.declared_value_cedis",
+    file: "db/migrations/2026-10-09_dispatch_view_courier_id.sql (P14)",
+  },
+  {
+    test: (name) => name.startsWith("courier_registry_dispatch."),
+    file: "db/migrations/2026-10-10_courier_registry_dispatch_view.sql (P15)",
+  },
+  {
+    test: () => true,
+    file: "db/migrations/2026-09-07_dispatch_reader_masked_view.sql, then 2026-09-15_dispatch_view_remit_cedis.sql",
+  },
+]
 
 // ---------------------------------------------------------------------------
 // Formatting
@@ -302,6 +406,52 @@ function route(from, to) {
   return `${show(from)} -> ${show(to)}`
 }
 
+// A null declared value is a fact, not a verdict: every job posted before
+// item 7 holds null, and the buffer guard counts it as over the cap.
+function declaredValue(value) {
+  if (value === null || value === undefined) return "(null, no value declared)"
+  return show(value)
+}
+
+// Indexes the rows read from courier_registry_dispatch by courier_ref. A list
+// per reference, not one row, because 8 characters of a uuid are not
+// guaranteed unique and a collision must show as one rather than pick a row.
+function indexCourierRegistry(rows) {
+  const registry = new Map()
+  for (const row of rows) {
+    const key = String(row.courier_ref).toLowerCase()
+    if (!registry.has(key)) registry.set(key, [])
+    registry.get(key).push(row)
+  }
+  return registry
+}
+
+// The courier on a job as the operator reads it. Every value printed comes
+// from courier_registry_dispatch: assigned_courier_id is used only to find the
+// row whose courier_ref is its first 8 characters, and is never printed.
+function courierRef(row, registry) {
+  const id = row.assigned_courier_id
+  if (id === null || id === undefined) return "(null, no assigned_courier_id)"
+  if (!registry) return "(courier registry not read)"
+  const matches = registry.get(String(id).slice(0, 8).toLowerCase()) ?? []
+  if (matches.length === 0) return "(no courier_registry_dispatch row carries this job's reference)"
+  if (matches.length > 1) {
+    return `${matches[0].courier_ref}, ambiguous: ${matches.length} courier_registry_dispatch rows share this reference`
+  }
+  const m = matches[0]
+  return `${m.courier_ref}, class ${show(m.class)}, status ${show(m.status)}`
+}
+
+// The two courier fields every guest section prints, in this order:
+// assigned_courier as stored (a Pioneer's pi_username, null on a legacy
+// claim), then the registry reference.
+function courierFields(row, ctx) {
+  return [
+    ["assigned_courier", show(row.assigned_courier)],
+    ["courier_ref", courierRef(row, ctx?.registry)],
+  ]
+}
+
 // Names the whitespace at the edges of a value by code point. Section 0.1
 // brackets the value in SQL so the space is visible at all, but a bracket
 // cannot tell a trailing space from a trailing tab, and the two are not the
@@ -361,6 +511,7 @@ const SECTIONS = [
       dateOf("scheduled_date"),
       "payment_type",
       "quote_cedis",
+      "declared_value_cedis",
       "sender_phone_masked",
     ],
     render: (r) => ({
@@ -375,6 +526,7 @@ const SECTIONS = [
         ["scheduled_date", show(r.scheduled_date_txt)],
         ["payment_type", show(r.payment_type)],
         ["quote_cedis", toAmount(r.quote_cedis).text],
+        ["declared_value_cedis", declaredValue(r.declared_value_cedis)],
         ["sender_phone", show(r.sender_phone_masked)],
       ],
     }),
@@ -399,6 +551,7 @@ const SECTIONS = [
       dateOf("scheduled_date"),
       "payment_type",
       "quote_cedis",
+      "declared_value_cedis",
       "sender_phone_masked",
     ],
     render: (r) => ({
@@ -413,6 +566,7 @@ const SECTIONS = [
         ["scheduled_date", show(r.scheduled_date_txt)],
         ["payment_type", show(r.payment_type)],
         ["quote_cedis", toAmount(r.quote_cedis).text],
+        ["declared_value_cedis", declaredValue(r.declared_value_cedis)],
         ["sender_phone", show(r.sender_phone_masked)],
       ],
     }),
@@ -433,6 +587,7 @@ const SECTIONS = [
       "phone_verified",
       tstamp("verified_at"),
       "assigned_courier",
+      "assigned_courier_id",
       "pickup_area",
       "dropoff_area",
       "package_size",
@@ -440,8 +595,9 @@ const SECTIONS = [
       dateOf("scheduled_date"),
       "payment_type",
       "quote_cedis",
+      "declared_value_cedis",
     ],
-    render: (r) => {
+    render: (r, ctx) => {
       const secs = toInt(r.created_at_age_secs)
       const flags = []
       if (secs !== null && secs >= POSTED_STALE_HOURS * 3600) {
@@ -455,13 +611,14 @@ const SECTIONS = [
           ["created_at", show(r.created_at_txt)],
           ["phone_verified", show(r.phone_verified)],
           ["verified_at", show(r.verified_at_txt)],
-          ["assigned_courier", show(r.assigned_courier)],
+          ...courierFields(r, ctx),
           ["route", route(r.pickup_area, r.dropoff_area)],
           ["package_size", show(r.package_size)],
           ["when_pref", show(r.when_pref)],
           ["scheduled_date", show(r.scheduled_date_txt)],
           ["payment_type", show(r.payment_type)],
           ["quote_cedis", toAmount(r.quote_cedis).text],
+          ["declared_value_cedis", declaredValue(r.declared_value_cedis)],
         ],
       }
     },
@@ -481,23 +638,26 @@ const SECTIONS = [
       ageOf("created_at"),
       tstamp("updated_at"),
       "assigned_courier",
+      "assigned_courier_id",
       "pickup_area",
       "dropoff_area",
       "package_size",
       "quote_cedis",
+      "declared_value_cedis",
       "sender_phone_masked",
       "recipient_phone_masked",
     ],
-    render: (r) => ({
+    render: (r, ctx) => ({
       flags: [],
       age: r.created_at_age_secs,
       fields: [
         ["created_at", show(r.created_at_txt)],
         ["updated_at", show(r.updated_at_txt)],
-        ["assigned_courier", show(r.assigned_courier)],
+        ...courierFields(r, ctx),
         ["route", route(r.pickup_area, r.dropoff_area)],
         ["package_size", show(r.package_size)],
         ["quote_cedis", toAmount(r.quote_cedis).text],
+        ["declared_value_cedis", declaredValue(r.declared_value_cedis)],
         ["sender_phone", show(r.sender_phone_masked)],
         ["recipient_phone", show(r.recipient_phone_masked)],
       ],
@@ -519,12 +679,14 @@ const SECTIONS = [
       ageOf("pickup_confirmed_at"),
       "pickup_confirmed_by",
       "assigned_courier",
+      "assigned_courier_id",
       "pickup_area",
       "dropoff_area",
       "package_size",
       "quote_cedis",
+      "declared_value_cedis",
     ],
-    render: (r) => ({
+    render: (r, ctx) => ({
       flags: ["ALARM: pickup stamped but status is still accepted. The confirm-pickup automation did not fire on this row. Review before any hand flip."],
       age: r.pickup_confirmed_at_age_secs,
       ageLabel: "stamped",
@@ -532,10 +694,11 @@ const SECTIONS = [
         ["created_at", show(r.created_at_txt)],
         ["pickup_confirmed_at", show(r.pickup_confirmed_at_txt)],
         ["pickup_confirmed_by", show(r.pickup_confirmed_by)],
-        ["assigned_courier", show(r.assigned_courier)],
+        ...courierFields(r, ctx),
         ["route", route(r.pickup_area, r.dropoff_area)],
         ["package_size", show(r.package_size)],
         ["quote_cedis", toAmount(r.quote_cedis).text],
+        ["declared_value_cedis", declaredValue(r.declared_value_cedis)],
       ],
     }),
   },
@@ -543,7 +706,7 @@ const SECTIONS = [
   {
     id: 6,
     title: "IN TRANSIT, watching the handover",
-    subtitle: `delivery_code_attempts is the courier's code entry count. ${MAX_CODE_ATTEMPTS} of ${MAX_CODE_ATTEMPTS} is the hard stop in app/api/guest/confirm-delivery/route.ts, at which the route returns code_locked.`,
+    subtitle: `delivery_code_attempts is the courier's code entry count. ${MAX_CODE_ATTEMPTS} of ${MAX_CODE_ATTEMPTS} is the hard stop in confirmCourierCode, lib/guest-claim.ts, which both confirm routes call, and at which they return code_locked.`,
     table: "public.guest_jobs_dispatch",
     where: "status = 'in_transit'",
     order: "updated_at asc",
@@ -556,11 +719,13 @@ const SECTIONS = [
       tstamp("delivery_confirmed_at"),
       "delivery_confirmed_by",
       "assigned_courier",
+      "assigned_courier_id",
       "pickup_area",
       "dropoff_area",
+      "declared_value_cedis",
       "recipient_phone_masked",
     ],
-    render: (r) => {
+    render: (r, ctx) => {
       const attempts = toInt(r.delivery_code_attempts)
       const flags = []
       if (attempts !== null && attempts >= MAX_CODE_ATTEMPTS) {
@@ -580,8 +745,9 @@ const SECTIONS = [
           ["delivery_code_attempts", show(r.delivery_code_attempts)],
           ["delivery_confirmed_at", show(r.delivery_confirmed_at_txt)],
           ["delivery_confirmed_by", show(r.delivery_confirmed_by)],
-          ["assigned_courier", show(r.assigned_courier)],
+          ...courierFields(r, ctx),
           ["route", route(r.pickup_area, r.dropoff_area)],
+          ["declared_value_cedis", declaredValue(r.declared_value_cedis)],
           ["recipient_phone", show(r.recipient_phone_masked)],
         ],
       }
@@ -603,12 +769,13 @@ const SECTIONS = [
       "delivery_confirmed_by",
       "delivery_code_attempts",
       "assigned_courier",
+      "assigned_courier_id",
       "pickup_area",
       "dropoff_area",
       "quote_cedis",
       tstamp("remit_paid_at"),
     ],
-    render: (r) => ({
+    render: (r, ctx) => ({
       flags:
         r.delivery_confirmed_by === "sender+courier_code"
           ? ["fully stamped close: sender and delivery code"]
@@ -619,7 +786,7 @@ const SECTIONS = [
         ["delivery_confirmed_at", show(r.delivery_confirmed_at_txt)],
         ["delivery_confirmed_by", show(r.delivery_confirmed_by)],
         ["delivery_code_attempts", show(r.delivery_code_attempts)],
-        ["assigned_courier", show(r.assigned_courier)],
+        ...courierFields(r, ctx),
         ["route", route(r.pickup_area, r.dropoff_area)],
         ["quote_cedis", toAmount(r.quote_cedis).text],
         ["remit_paid_at", show(r.remit_paid_at_txt)],
@@ -647,13 +814,14 @@ const SECTIONS = [
       tstamp("delivery_confirmed_at"),
       "delivery_confirmed_by",
       "assigned_courier",
+      "assigned_courier_id",
       "pickup_area",
       "dropoff_area",
       "payment_type",
       "quote_cedis",
       "remit_cedis",
     ],
-    render: (r) => ({
+    render: (r, ctx) => ({
       flags: [],
       age: r.updated_at_age_secs,
       ageLabel: "since updated_at",
@@ -661,7 +829,7 @@ const SECTIONS = [
         ["updated_at", show(r.updated_at_txt)],
         ["delivery_confirmed_at", show(r.delivery_confirmed_at_txt)],
         ["delivery_confirmed_by", show(r.delivery_confirmed_by)],
-        ["assigned_courier", show(r.assigned_courier)],
+        ...courierFields(r, ctx),
         ["route", route(r.pickup_area, r.dropoff_area)],
         ["payment_type", show(r.payment_type)],
         ["quote_cedis", toAmount(r.quote_cedis).text],
@@ -707,6 +875,7 @@ const SECTIONS = [
       tstamp("delivery_confirmed_at"),
       "delivery_confirmed_by",
       "assigned_courier",
+      "assigned_courier_id",
       "pickup_area",
       "dropoff_area",
       "quote_cedis",
@@ -718,7 +887,7 @@ const SECTIONS = [
       `created_at >= '${COMMISSION_SHIPPED_LATEST}'::timestamptz as created_after_window`,
       `pickup_confirmed_at < '${COMMISSION_SHIPPED_EARLIEST}'::timestamptz or delivery_confirmed_at < '${COMMISSION_SHIPPED_EARLIEST}'::timestamptz as stamped_before_window`,
     ],
-    render: (r) => {
+    render: (r, ctx) => {
       const era = commissionEra(r)
       const flags = []
       if (era === "inconsistent") {
@@ -741,7 +910,7 @@ const SECTIONS = [
           ["delivery_confirmed_at", show(r.delivery_confirmed_at_txt)],
           ["delivery_confirmed_by", show(r.delivery_confirmed_by)],
           ["updated_at", show(r.updated_at_txt)],
-          ["assigned_courier", show(r.assigned_courier)],
+          ...courierFields(r, ctx),
           ["route", route(r.pickup_area, r.dropoff_area)],
           ["quote_cedis", toAmount(r.quote_cedis).text],
         ],
@@ -794,7 +963,101 @@ const SECTIONS = [
       ],
     }),
   },
+
+  // Sections 10 and 11 read the courier registry through its masked view and
+  // list couriers, not jobs, so each row is keyed by courier_ref. Both leave
+  // out shredded rows: a shredded courier has no one left to flip or nudge.
+  {
+    id: 10,
+    title: `BUFFER COURIERS DUE A HAND PAUSE, ${BUFFER_WINDOW_DAYS} days or more`,
+    subtitle: `status buffer with buffer_since ${BUFFER_WINDOW_DAYS} days or more ago, and buffer with no buffer_since at all. effectiveTier in lib/courier-ladder.ts already refuses both every job, computed on read; the stored status is set by hand (decision 7), so these rows are where it still reads buffer. A null buffer_since is refused closed by the ladder and also reported by catalog check 14.`,
+    table: "public.courier_registry_dispatch",
+    key: "courier_ref",
+    where: `status = 'buffer' and shredded_at is null and buffer_since <= now() - interval '${BUFFER_WINDOW_DAYS} days' or status = 'buffer' and shredded_at is null and buffer_since is null`,
+    order: "buffer_since asc, courier_ref asc",
+    columns: [
+      "courier_ref",
+      "class",
+      "status",
+      tstamp("buffer_since"),
+      ageOf("buffer_since"),
+      "piverify_status",
+      tstamp("piverify_status_at"),
+      "paused_reason",
+    ],
+    render: (r) => ({
+      flags:
+        r.buffer_since_txt === null || r.buffer_since_txt === undefined
+          ? ["buffer with no buffer_since: the ladder refuses this courier every job"]
+          : [`past the ${BUFFER_WINDOW_DAYS} day buffer window: the ladder refuses this courier every job`],
+      age: r.buffer_since_age_secs,
+      ageLabel: "since buffer_since",
+      fields: [
+        ["class", show(r.class)],
+        ["status", show(r.status)],
+        ["buffer_since", show(r.buffer_since_txt)],
+        ["piverify_status", show(r.piverify_status)],
+        ["piverify_status_at", show(r.piverify_status_at_txt)],
+        ["paused_reason", show(r.paused_reason)],
+      ],
+    }),
+  },
+
+  {
+    id: 11,
+    title: `PIVERIFY SESSIONS UNTOUCHED FOR ${STALE_SESSION_HOURS}h, to nudge`,
+    subtitle: `piverify_status ${UNSETTLED_PIVERIFY_STATUSES.join(", ")}, or rejected with a piverify_allowed_action, with piverify_status_at ${STALE_SESSION_HOURS} hours or more ago. Nothing polls a courier who never opens the page (docs/anchoring-phase1-notes.md, 5.4). Every row is unsettled, as isUnsettled in app/courier/courier-panel.tsx reads it: a rejected session is unsettled only while PiVerify allows a resubmission or an appeal. A rejection with no allowed action is final and is not listed.`,
+    table: "public.courier_registry_dispatch",
+    key: "courier_ref",
+    where: `piverify_status in (${UNSETTLED_PIVERIFY_STATUSES.map((s) => `'${s}'`).join(", ")}) and shredded_at is null and piverify_status_at <= now() - interval '${STALE_SESSION_HOURS} hours' or piverify_status = 'rejected' and piverify_allowed_action is not null and shredded_at is null and piverify_status_at <= now() - interval '${STALE_SESSION_HOURS} hours'`,
+    order: "piverify_status_at asc, courier_ref asc",
+    columns: [
+      "courier_ref",
+      "class",
+      "status",
+      "piverify_status",
+      "piverify_allowed_action",
+      tstamp("piverify_status_at"),
+      ageOf("piverify_status_at"),
+      tstamp("buffer_since"),
+      "paused_reason",
+    ],
+    render: (r) => ({
+      flags: [],
+      age: r.piverify_status_at_age_secs,
+      ageLabel: "since piverify_status_at",
+      fields: [
+        ["class", show(r.class)],
+        ["status", show(r.status)],
+        ["piverify_status", show(r.piverify_status)],
+        ["piverify_allowed_action", show(r.piverify_allowed_action)],
+        ["piverify_status_at", show(r.piverify_status_at_txt)],
+        ["buffer_since", show(r.buffer_since_txt)],
+        ["paused_reason", show(r.paused_reason)],
+      ],
+    }),
+    footer: (rows) => [
+      "  buckets, counted from the rows above:",
+      `    unsettled, ${UNSETTLED_PIVERIFY_STATUSES.join(" or ")}, or rejected with an allowed action: ${rows.length} row(s)`,
+    ],
+  },
 ]
+
+// The lookup behind courier_ref on every guest section. Read once, before any
+// section, from the masked view and nothing else.
+const COURIER_REGISTRY_LOOKUP = {
+  id: "courier registry",
+  title: "COURIER REFERENCES",
+  table: "public.courier_registry_dispatch",
+  where: "true",
+  order: "courier_ref asc",
+  columns: ["courier_ref", "class", "status"],
+}
+
+async function readCourierRegistry(client) {
+  const { rows } = await runSelect(client, buildSql(COURIER_REGISTRY_LOOKUP))
+  return indexCourierRegistry(rows)
+}
 
 // ---------------------------------------------------------------------------
 // Section 0 check definitions
@@ -915,11 +1178,12 @@ const CHECKS = [
       ageOf("updated_at"),
       "delivery_code_attempts",
       "assigned_courier",
+      "assigned_courier_id",
       "pickup_area",
       "dropoff_area",
       "quote_cedis",
     ],
-    render: (r) => {
+    render: (r, ctx) => {
       const by = r.delivery_confirmed_by
       const flags = []
       if (by === "courier_code") {
@@ -952,7 +1216,7 @@ const CHECKS = [
           ["delivery_confirmed_at", show(r.delivery_confirmed_at_txt)],
           ["updated_at", show(r.updated_at_txt)],
           ["delivery_code_attempts", show(r.delivery_code_attempts)],
-          ["assigned_courier", show(r.assigned_courier)],
+          ...courierFields(r, ctx),
           ["route", route(r.pickup_area, r.dropoff_area)],
           ["quote_cedis", toAmount(r.quote_cedis).text],
         ],
@@ -993,12 +1257,13 @@ const CHECKS = [
       tstamp("delivery_confirmed_at"),
       "delivery_confirmed_by",
       "assigned_courier",
+      "assigned_courier_id",
       "pickup_area",
       "dropoff_area",
       "quote_cedis",
       "remit_cedis",
     ],
-    render: (r) => ({
+    render: (r, ctx) => ({
       flags: [`remit_paid_at is set on a job whose status is ${show(r.status)}, not delivered`],
       age: r.remit_paid_at_age_secs,
       ageLabel: "since remit_paid_at",
@@ -1008,7 +1273,7 @@ const CHECKS = [
         ["updated_at", show(r.updated_at_txt)],
         ["delivery_confirmed_at", show(r.delivery_confirmed_at_txt)],
         ["delivery_confirmed_by", show(r.delivery_confirmed_by)],
-        ["assigned_courier", show(r.assigned_courier)],
+        ...courierFields(r, ctx),
         ["route", route(r.pickup_area, r.dropoff_area)],
         ["quote_cedis", toAmount(r.quote_cedis).text],
         ["remit_cedis", toAmount(r.remit_cedis).text],
@@ -1041,9 +1306,9 @@ const CHECKS = [
   {
     id: "0.5",
     title: "COMMISSION MISSING ON A JOB CLAIMED AFTER IT SHIPPED",
-    subtitle: `assigned_courier set, remit_cedis null, created_at on or after ${COMMISSION_SHIPPED_LATEST}, any status. A job created after that moment can only have been claimed after the commission shipped on both networks, and /api/guest/accept writes remit_cedis in the same UPDATE that assigns the courier. A row here was assigned some other way. This check sees it at claim time, before it can reach section 8b as a data gap.`,
+    subtitle: `assigned_courier or assigned_courier_id set, remit_cedis null, created_at on or after ${COMMISSION_SHIPPED_LATEST}, any status. A job created after that moment can only have been claimed after the commission shipped on both networks, and both accept routes, /api/guest/accept for a Pioneer and /api/courier/jobs/accept for a legacy courier, write remit_cedis in the same UPDATE that assigns the courier. A row here was assigned some other way. This check sees it at claim time, before it can reach section 8b as a data gap. A legacy claim leaves assigned_courier null, so the clause has one arm per assignment column; it carries no parentheses because the read only guard refuses any after a boolean operator, and needs none because AND binds tighter than OR.`,
     table: "public.guest_jobs_dispatch",
-    where: `assigned_courier is not null and remit_cedis is null and created_at >= '${COMMISSION_SHIPPED_LATEST}'::timestamptz`,
+    where: `assigned_courier is not null and remit_cedis is null and created_at >= '${COMMISSION_SHIPPED_LATEST}'::timestamptz or assigned_courier_id is not null and remit_cedis is null and created_at >= '${COMMISSION_SHIPPED_LATEST}'::timestamptz`,
     order: "created_at asc",
     columns: [
       "tracking_id",
@@ -1052,20 +1317,25 @@ const CHECKS = [
       ageOf("created_at"),
       tstamp("updated_at"),
       "assigned_courier",
+      "assigned_courier_id",
       "pickup_area",
       "dropoff_area",
       "quote_cedis",
       tstamp("remit_paid_at"),
     ],
-    render: (r) => ({
-      flags: [`assigned to ${show(r.assigned_courier)} with no remit_cedis, on a job created after the commission shipped`],
+    render: (r, ctx) => ({
+      flags: [
+        r.assigned_courier !== null && r.assigned_courier !== undefined
+          ? `assigned to ${show(r.assigned_courier)} with no remit_cedis, on a job created after the commission shipped`
+          : `assigned to courier_ref ${courierRef(r, ctx?.registry)} with no remit_cedis, on a job created after the commission shipped`,
+      ],
       age: r.created_at_age_secs,
       ageLabel: "since created_at",
       fields: [
         ["status", show(r.status)],
         ["created_at", show(r.created_at_txt)],
         ["updated_at", show(r.updated_at_txt)],
-        ["assigned_courier", show(r.assigned_courier)],
+        ...courierFields(r, ctx),
         ["route", route(r.pickup_area, r.dropoff_area)],
         ["quote_cedis", toAmount(r.quote_cedis).text],
         ["remit_paid_at", show(r.remit_paid_at_txt)],
@@ -1191,6 +1461,50 @@ async function preflight(client) {
   return { missing, visible: seen }
 }
 
+// The text printed when the preflight finds a column missing, grouped by the
+// migration that adds it. Exported so the wording is tested without a
+// database: a missing P14 or P15 must read as exactly that, and never as a
+// short report.
+function describePreflightFailure(missing) {
+  const lines = [
+    "",
+    RULE,
+    "PREFLIGHT FAILED, no section was run",
+    RULE,
+    "",
+    "  These columns are required by the report and are not visible to this",
+    "  role. information_schema.columns is filtered by privilege, so each one",
+    "  is either absent from its view or never granted to gyema_reader.",
+  ]
+  const groups = new Map()
+  for (const name of missing) {
+    const file = COLUMN_SOURCES.find((s) => s.test(name)).file
+    if (!groups.has(file)) groups.set(file, [])
+    groups.get(file).push(name)
+  }
+  for (const [file, names] of groups) {
+    lines.push("")
+    lines.push(`  Added by ${file}, which is likely not applied to THIS project yet:`)
+    for (const name of names) lines.push(`    ${name}`)
+  }
+  lines.push(
+    "",
+    "  The report reads three views, never the base tables. Check what the",
+    "  role can reach:",
+    "",
+    "    select table_name, privilege_type",
+    "      from information_schema.role_table_grants",
+    "     where grantee = 'gyema_reader'",
+    "     order by table_name;",
+    "",
+    "  Expect exactly three rows, courier_registry_dispatch,",
+    "  guest_jobs_dispatch and listings_dispatch, all SELECT, and none of",
+    "  courier_registry, guest_jobs or listings.",
+    ""
+  )
+  return lines
+}
+
 // ---------------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------------
@@ -1231,13 +1545,14 @@ function wrap(text, width) {
 }
 
 // Renders one row and returns the view it rendered, so the caller can count
-// flags without invoking section.render a second time.
-function printRow(section, row) {
-  const view = section.render(row)
+// flags without invoking section.render a second time. A row is headed by
+// its tracking_id, or by the column a section names as its key.
+function printRow(section, row, ctx) {
+  const view = section.render(row, ctx)
   const ageLabel = view.ageLabel || "age"
   const agePart = view.age === null || view.age === undefined ? "" : `   ${ageLabel} ${humanAge(view.age)}`
   console.log("")
-  console.log(`  ${show(row.tracking_id)}${agePart}`)
+  console.log(`  ${show(row[section.key || "tracking_id"])}${agePart}`)
   for (const flag of view.flags) console.log(`      >> ${flag}`)
   for (const [label, value] of view.fields) console.log(field(label, value))
   return view
@@ -1261,7 +1576,7 @@ function printRow(section, row) {
 // data would be useless on exactly the days it is needed. A check that errors
 // does set exit 2, the same as a failed section.
 // ---------------------------------------------------------------------------
-async function runIntegrity(client) {
+async function runIntegrity(client, ctx) {
   console.log("")
   console.log(RULE)
   console.log("SECTION 0  INTEGRITY CHECKS")
@@ -1303,7 +1618,7 @@ async function runIntegrity(client) {
     findingRows += rows.length
     checksWithFindings += 1
     for (const row of rows) {
-      alerts += printRow(check, row).flags.length
+      alerts += printRow(check, row, ctx).flags.length
     }
     if (check.footer) {
       console.log("")
@@ -1344,8 +1659,9 @@ async function runIntegrity(client) {
 // one first passed through assertReadOnlySql, then exits. It opens no
 // connection and needs no credentials.
 //
-// Two uses. It proves the read only guard accepts exactly these sixteen
-// statements and nothing else, and it hands over the statements themselves so
+// Two uses. It proves the read only guard accepts exactly these nineteen
+// statements (the preflight, the courier reference lookup, five checks and
+// twelve sections) and nothing else, and it hands over the statements themselves so
 // they can be pasted into the Supabase SQL editor and the printed report
 // checked against the database row by row.
 // ---------------------------------------------------------------------------
@@ -1429,6 +1745,7 @@ function dryRun() {
 
   const statements = [
     { name: "preflight", sql: buildPreflightSql() },
+    { name: "courier reference lookup", sql: buildSql(COURIER_REGISTRY_LOOKUP) },
     ...CHECKS.map((c) => ({ name: `check ${c.id}, ${c.title}`, sql: buildSql(c) })),
     ...SECTIONS.map((s) => ({ name: `section ${s.id}, ${s.title}`, sql: buildSql(s) })),
   ]
@@ -1583,42 +1900,39 @@ async function main() {
 
     const { missing } = await preflight(client)
     if (missing.length > 0) {
-      console.error("")
-      console.error(RULE)
-      console.error("PREFLIGHT FAILED, no section was run")
-      console.error(RULE)
-      console.error("")
-      console.error("  These columns are required by the report and are not visible to this")
-      console.error("  role. information_schema.columns is filtered by privilege, so each one")
-      console.error("  is either absent from the view or never granted to gyema_reader:")
-      console.error("")
-      for (const name of missing) console.error(`    ${name}`)
-      console.error("")
-      console.error("  The report reads two views, not the base tables. The usual cause is")
-      console.error("  that db/migrations/2026-09-07_dispatch_reader_masked_view.sql has not")
-      console.error("  been applied to THIS project yet. Check what the role can reach:")
-      console.error("")
-      console.error("    select table_name, privilege_type")
-      console.error("      from information_schema.role_table_grants")
-      console.error("     where grantee = 'gyema_reader'")
-      console.error("     order by table_name;")
-      console.error("")
-      console.error("  Expect exactly two rows, guest_jobs_dispatch and listings_dispatch,")
-      console.error("  both SELECT, and neither guest_jobs nor listings.")
-      console.error("")
+      for (const line of describePreflightFailure(missing)) console.error(line)
       process.exit(1)
     }
 
     console.log("")
     console.log(
-      `  Preflight passed: all ${REQUIRED_COLUMNS.guest_jobs_dispatch.length + REQUIRED_COLUMNS.listings_dispatch.length} required columns are readable.`
+      `  Preflight passed: all ${Object.values(REQUIRED_COLUMNS).flat().length} required columns are readable.`
     )
+
+    // The courier references, read once before any section. Every guest
+    // section prints its courier through them, so a failure here stops the
+    // report rather than printing jobs whose courier column cannot be read.
+    let registry
+    try {
+      registry = await readCourierRegistry(client)
+    } catch (err) {
+      console.error("")
+      console.error(RULE)
+      console.error("COURIER REFERENCES COULD NOT BE READ, no section was run")
+      console.error(RULE)
+      console.error(`  ${err.code ? `${err.code} ` : ""}${err.message}`)
+      console.error(`  from ${COURIER_REGISTRY_LOOKUP.table}`)
+      console.error("")
+      process.exit(1)
+    }
+    const ctx = { registry }
+    console.log(`  Courier references read: ${[...registry.values()].flat().length} row(s) from ${COURIER_REGISTRY_LOOKUP.table}.`)
 
     const counts = []
 
     // Section 0 first, and its index row first, because a data integrity
     // finding changes how every queue section below it reads.
-    const integrity = await runIntegrity(client)
+    const integrity = await runIntegrity(client, ctx)
     counts.push(integrity.indexRow)
     if (integrity.failed > 0) exitCode = 2
 
@@ -1647,7 +1961,7 @@ async function main() {
         console.log("  No rows.")
       } else {
         for (const row of rows) {
-          alerts += printRow(section, row).flags.length
+          alerts += printRow(section, row, ctx).flags.length
         }
       }
 
@@ -1696,10 +2010,19 @@ export {
   assertReadOnlySql,
   buildSql,
   buildPreflightSql,
+  preflight,
+  describePreflightFailure,
+  parseSharedConstant,
   runIntegrity,
+  readCourierRegistry,
+  indexCourierRegistry,
+  courierRef,
   SECTIONS,
   CHECKS,
+  COURIER_REGISTRY_LOOKUP,
   REQUIRED_COLUMNS,
+  MAX_CODE_ATTEMPTS,
+  BUFFER_WINDOW_DAYS,
   DECLARED_GUEST_STATUSES,
   COMMISSION_SHIPPED_EARLIEST,
   COMMISSION_SHIPPED_LATEST,
