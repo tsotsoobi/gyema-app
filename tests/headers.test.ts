@@ -109,11 +109,18 @@ describe("the https redirect", () => {
   })
 
   it("never redirects loopback, where there is no https to redirect to", () => {
-    for (const host of ["localhost:3000", "127.0.0.1:3000", "localhost"]) {
+    for (const host of ["localhost:3000", "127.0.0.1:3000", "localhost", "couriers.localhost:3000"]) {
       const res = middleware(
         request(`http://${host}/`, { "x-forwarded-proto": "http", host })
       )
       expect(res.status, host).toBe(200)
+    }
+  })
+
+  it("still redirects a name that only looks like loopback", () => {
+    for (const host of ["localhost.example.test", "couriers.localhost.example.test"]) {
+      const res = middleware(request(`http://${host}/`, { "x-forwarded-proto": "http", host }))
+      expect(res.status, host).toBe(308)
     }
   })
 
@@ -133,10 +140,11 @@ describe("the https redirect", () => {
       .join("\n")
     expect(code).not.toContain("NODE_ENV")
 
-    // One environment variable is read in this file, and it is the CSP mode
-    // flag: a deliberate switch rather than an accident of deployment.
-    // Anything else appearing here should be looked at.
+    // Two environment variables are read in this file, both deliberate
+    // switches rather than accidents of deployment: the courier host
+    // (lib/courier-host.ts) and the CSP mode flag. Anything else appearing
+    // here should be looked at.
     const envReads = code.match(/process\.env\.[A-Z_]+/g) ?? []
-    expect(envReads).toEqual(["process.env.CSP_ENFORCE"])
+    expect(envReads).toEqual(["process.env.COURIER_HOST", "process.env.CSP_ENFORCE"])
   })
 })

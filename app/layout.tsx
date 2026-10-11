@@ -5,10 +5,13 @@ import Script from "next/script"
 import { GeistSans } from "geist/font/sans"
 import { GeistMono } from "geist/font/mono"
 import { TestnetBanner } from "@/components/testnet-banner"
+import { CourierTestBanner } from "@/components/courier-test-banner"
+import { SURFACE_HEADER } from "@/lib/courier-host"
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "Gyema — P2P Delivery on Pi",
+  // Copy approved 11 Oct 2026 (8.17).
+  title: "Gyema: peer to peer delivery on Pi",
   description:
     "Gyema connects routine travellers with senders needing packages delivered. Decentralized P2P delivery powered by Pi Network.",
 }
@@ -48,6 +51,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
+  // COPY: later (8.17). A purple that is not in the palette (8.4).
   themeColor: "#7B2CBF",
 }
 
@@ -59,7 +63,15 @@ export default async function RootLayout({
   // Set by middleware.ts on the request. Absent only if middleware did not
   // run, in which case the CSP header is absent too and an unnonced script is
   // still executed: the two travel together or not at all.
-  const nonce = (await headers()).get("x-nonce") ?? undefined
+  const requestHeaders = await headers()
+  const nonce = requestHeaders.get("x-nonce") ?? undefined
+
+  // The courier host never loads the Pi SDK (lib/courier-host.ts). Its
+  // couriers have no Pi account, it runs in an ordinary browser, and its CSP
+  // names no Pi origin. middleware.ts always sets this header, so a value a
+  // client sent is never what is read here. Anything but "courier" is the
+  // Pioneer surface, which keeps the SDK if middleware did not run at all.
+  const onCourierHost = requestHeaders.get(SURFACE_HEADER) === "courier"
 
   return (
     <html lang="en">
@@ -74,15 +86,16 @@ html {
       </head>
       <body>
         {/*
-          Pi Network SDK — must load BEFORE any code that calls window.Pi.
+          Pi Network SDK, Pioneer surface only. Must load BEFORE any code
+          that calls window.Pi.
           strategy="beforeInteractive" guarantees the SDK script runs before
           React hydrates, so window.Pi is defined when client components mount.
 
           sandbox flag is set dynamically based on hostname. Per Pi SDK docs,
           sandbox: true is ONLY for the Pi Sandbox environment at
           sandbox.minepi.com (desktop testing). When the app loads inside the
-          real Pi Browser — whether via the direct gyema-app.vercel.app URL
-          or Pi Browser's *.pinet.com proxy — sandbox must be false. Setting
+          real Pi Browser, whether via the direct gyema-app.vercel.app URL
+          or Pi Browser's *.pinet.com proxy, sandbox must be false. Setting
           sandbox: true while in Pi Browser triggers an iframe-context bug
           where event handlers break text input focus (observed May 6, 2026).
 
@@ -90,31 +103,35 @@ html {
           fall back to sandbox: true.
 
           Testnet vs mainnet is controlled by Developer Portal app config,
-          not this flag — changing sandbox does not affect Pi token type.
+          not this flag: changing sandbox does not affect Pi token type.
         */}
-        <Script
-          src="https://sdk.minepi.com/pi-sdk.js"
-          strategy="beforeInteractive"
-          nonce={nonce}
-        />
-        <Script id="pi-init" strategy="beforeInteractive" nonce={nonce}>
-          {`
-            try {
-              if (typeof Pi !== 'undefined') {
-                var host = typeof window !== 'undefined'
-                  ? window.location.hostname
-                  : '';
-                var isProduction =
-                  host === 'gyema-app.vercel.app' ||
-                  host.endsWith('.pinet.com');
-                Pi.init({ version: "2.0", sandbox: !isProduction });
-              }
-            } catch (e) {
-              console.warn("Pi SDK init skipped:", e);
-            }
-          `}
-        </Script>
-        <TestnetBanner />
+        {!onCourierHost && (
+          <>
+            <Script
+              src="https://sdk.minepi.com/pi-sdk.js"
+              strategy="beforeInteractive"
+              nonce={nonce}
+            />
+            <Script id="pi-init" strategy="beforeInteractive" nonce={nonce}>
+              {`
+                try {
+                  if (typeof Pi !== 'undefined') {
+                    var host = typeof window !== 'undefined'
+                      ? window.location.hostname
+                      : '';
+                    var isProduction =
+                      host === 'gyema-app.vercel.app' ||
+                      host.endsWith('.pinet.com');
+                    Pi.init({ version: "2.0", sandbox: !isProduction });
+                  }
+                } catch (e) {
+                  console.warn("Pi SDK init skipped:", e);
+                }
+              `}
+            </Script>
+          </>
+        )}
+        {onCourierHost ? <CourierTestBanner /> : <TestnetBanner />}
         {children}
       </body>
     </html>

@@ -266,13 +266,21 @@ describe("phoneIdentifier", () => {
 })
 
 describe("LIMITS", () => {
-  it("has a window and a failure mode on every bucket, and only the guest write closes", async () => {
+  it("has a window and a failure mode on every bucket, and only the guest write, courier sign-in, the PiVerify calls and the courier accept close", async () => {
     const { LIMITS } = await freshModule()
     const closed = Object.entries(LIMITS)
       .filter(([, spec]) => spec.onError === "closed")
       .map(([name]) => name)
       .sort()
-    expect(closed).toEqual(["guest_create_ip", "guest_create_phone"])
+    expect(closed).toEqual([
+      "courier_accept",
+      "courier_kyc_refresh",
+      "courier_kyc_start",
+      "courier_signin_global",
+      "courier_signin_ip",
+      "guest_create_ip",
+      "guest_create_phone",
+    ])
 
     for (const spec of Object.values(LIMITS)) {
       expect(spec.limit).toBeGreaterThan(0)

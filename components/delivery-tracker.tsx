@@ -2,93 +2,11 @@
 
 import { type Listing } from "@/lib/listings"
 import { type GuestJobView } from "@/lib/guest-jobs"
-
-type Stage = {
-  label: string
-  caption: string
-  state: "done" | "current" | "upcoming" | "cancelled"
-}
+import { deriveGuestStages, deriveStages, type Stage } from "@/lib/tracker-stages"
 
 const FOREST = "#15803D"
 const GOLD = "#F5B800"
 const VERMILLION = "#DC2626"
-
-function fmtDate(iso?: string | null): string {
-  if (!iso) return ""
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return ""
-  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })
-}
-
-function deriveStages(l: Listing): Stage[] {
-  const s = l.status
-  const cancelled = s === "expired"
-  const acceptedDone = s === "matched" || s === "in_transit" || s === "completed"
-  const delivered = s === "completed"
-
-  return [
-    {
-      label: "Posted",
-      caption: `@${l.postedByUsername} \u00b7 ${fmtDate(l.createdAt)}`,
-      state: "done",
-    },
-    {
-      label: "Accepted",
-      caption: cancelled
-        ? "Match cancelled"
-        : acceptedDone
-          ? `@${l.matchedWithUsername ?? "traveller"} is carrying it`
-          : "Waiting for a traveller",
-      state: cancelled ? "cancelled" : acceptedDone ? "done" : "current",
-    },
-    {
-      label: "In transit",
-      caption: `On the way to ${l.toCity}`,
-      state: cancelled ? "upcoming" : s === "in_transit" ? "current" : delivered ? "done" : "upcoming",
-    },
-    {
-      label: "Delivered",
-      caption: delivered ? `Signed for in ${l.toCity}` : `Destination: ${l.toCity}`,
-      state: delivered ? "done" : "upcoming",
-    },
-  ]
-}
-
-function deriveGuestStages(j: GuestJobView): Stage[] {
-  const s = j.status
-  const cancelled = s === "cancelled" || s === "expired"
-  const acceptedDone = s === "accepted" || s === "in_transit" || s === "delivered"
-  const delivered = s === "delivered"
-
-  return [
-    {
-      label: "Posted",
-      caption: `Phone-verified sender \u00b7 ${fmtDate(j.createdAt)}`,
-      state: "done",
-    },
-    {
-      label: "Accepted",
-      caption: cancelled
-        ? "Cancelled"
-        : acceptedDone
-          ? j.assignedCourier
-            ? `@${j.assignedCourier} \u00b7 Pi Pioneer is carrying it`
-            : "A Pi Pioneer is carrying it"
-          : "Waiting for a courier",
-      state: cancelled ? "cancelled" : acceptedDone ? "done" : "current",
-    },
-    {
-      label: "In transit",
-      caption: `On the way to ${j.dropoffArea}`,
-      state: cancelled ? "upcoming" : s === "in_transit" ? "current" : delivered ? "done" : "upcoming",
-    },
-    {
-      label: "Delivered",
-      caption: delivered ? `Signed for in ${j.dropoffArea}` : `Destination: ${j.dropoffArea}`,
-      state: delivered ? "done" : "upcoming",
-    },
-  ]
-}
 
 function nodeColor(state: Stage["state"]): string {
   if (state === "done") return FOREST

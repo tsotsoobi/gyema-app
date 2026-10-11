@@ -8,7 +8,14 @@ export const runtime = "nodejs"
 // Public tracking lookup for guest jobs. Server-side only: guest_jobs is
 // RLS-on with no public policy, so this route is the single sanctioned
 // read path. Returns a sanitized payload only. Never expose recipient_phone,
-// sender_phone, recipient_name, landmarks, or quote_cedis here.
+// sender_phone, recipient_name, landmarks, or quote_cedis here. Never expose
+// courier identity either, by username or by id (item 8, 8.1): this payload
+// reaches anyone holding a tracking ID.
+//
+// assigned_courier and assigned_courier_id are selected but NEVER emitted.
+// Only whether either is set leaves, as courierAssigned, the same two-column
+// rule as the claim and the board. A Pioneer job claimed before item 6 has
+// assigned_courier set and assigned_courier_id null, so both are read.
 //
 // delivery_code_hash is selected but NEVER emitted: this payload is
 // anonymous, and over a 4-digit space the hash is the code. Only its nullity
@@ -50,7 +57,7 @@ export async function GET(req: NextRequest) {
   const admin = createAdminClient()
   const { data, error } = await admin
     .from("guest_jobs")
-    .select("tracking_id, pickup_area, dropoff_area, status, created_at, assigned_courier, pickup_confirmed_at, delivery_confirmed_at, delivery_confirmed_by, delivery_code_hash")
+    .select("tracking_id, pickup_area, dropoff_area, status, created_at, assigned_courier, assigned_courier_id, pickup_confirmed_at, delivery_confirmed_at, delivery_confirmed_by, delivery_code_hash")
     .eq("tracking_id", trackingId)
     .eq("phone_verified", true)
     .maybeSingle()
@@ -72,7 +79,9 @@ export async function GET(req: NextRequest) {
       dropoffArea: data.dropoff_area,
       status: data.status,
       createdAt: data.created_at,
-      assignedCourier: data.assigned_courier,
+      // A boolean and nothing else. Loose != so an absent column counts as
+      // not set rather than set.
+      courierAssigned: data.assigned_courier != null || data.assigned_courier_id != null,
       pickupConfirmedAt: data.pickup_confirmed_at,
       deliveryConfirmedAt: data.delivery_confirmed_at,
       // Which sides have signed off. On a coded job delivery_confirmed_at

@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest"
-// @ts-expect-error plain .mjs script with no type declarations
 import { evaluate } from "../scripts/audit-gate.mjs"
 
 // The gate that replaced `npm audit --audit-level=high` in `npm run security`.

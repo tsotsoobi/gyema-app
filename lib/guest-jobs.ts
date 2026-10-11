@@ -6,6 +6,7 @@ import { STAMP_COURIER_CODE } from "./delivery-stamps"
 
 export type GuestJobStatus =
   | "posted"
+  | "pending_quote"
   | "accepted"
   | "in_transit"
   | "delivered"
@@ -39,7 +40,6 @@ export type GuestJobView = {
   dropoffArea: string
   status: GuestJobStatus
   createdAt: string
-  assignedCourier: string | null
   pickupConfirmedAt: string | null
   deliveryConfirmedAt: string | null
   // Which sides have signed off delivery, and whether this job carries a
@@ -48,6 +48,10 @@ export type GuestJobView = {
   // not carry them.
   deliveryConfirmedBy?: string | null
   hasDeliveryCode?: boolean
+  // Whether any courier holds this job, Pioneer or legacy. Never who: the
+  // route emits no courier username or id (item 8, 8.1). Optional for the
+  // same reason; absent reads as unknown and gets the no-claim caption.
+  courierAssigned?: boolean
 }
 
 /**
@@ -277,14 +281,22 @@ export async function getOpenGuestJobsAsync(): Promise<OpenGuestJob[]> {
   }
 }
 
+// A refusal carries the route's reason, so the sheet can tell an unregistered
+// or paused Pioneer the truth instead of "another courier may have taken it"
+// (item 8, 8.5 and 8.10). reason is null when there is no session, the request
+// failed, or the body named none; the sheet treats null as not_open.
+export type GuestAcceptResult =
+  | { ok: true; job: AcceptedGuestJob }
+  | { ok: false; reason: string | null }
+
 export async function acceptGuestJobAsync(input: {
   trackingId: string
   accepterWhatsapp: string
-}): Promise<AcceptedGuestJob | null> {
+}): Promise<GuestAcceptResult> {
   const session = getSupabaseSession()
   if (!session?.accessToken) {
     console.error("acceptGuestJobAsync: no active Supabase session")
-    return null
+    return { ok: false, reason: null }
   }
   try {
     const res = await fetch("/api/guest/accept", {
@@ -299,10 +311,10 @@ export async function acceptGuestJobAsync(input: {
     const body = await res.json()
     if (!res.ok || !body?.ok || !body.job) {
       console.warn("acceptGuestJobAsync: claim not completed:", body?.reason)
-      return null
+      return { ok: false, reason: typeof body?.reason === "string" ? body.reason : null }
     }
     const j = body.job
-    return {
+    const job: AcceptedGuestJob = {
       trackingId: j.tracking_id,
       pickupArea: j.pickup_area,
       pickupLandmark: j.pickup_landmark,
@@ -316,8 +328,9 @@ export async function acceptGuestJobAsync(input: {
       keepsCedis: j.keeps_cedis ?? null,
       commissionRateLabel: j.commission_rate_label ?? null,
     }
+    return { ok: true, job }
   } catch (err) {
     console.error("acceptGuestJobAsync error:", err)
-    return null
+    return { ok: false, reason: null }
   }
 }

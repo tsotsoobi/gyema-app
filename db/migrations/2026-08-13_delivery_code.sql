@@ -205,16 +205,24 @@ grant execute on function public.guest_stamp_delivery(text, text)
 -- ---------------------------------------------------------------------------
 -- 5. Verification (read-only, changes nothing)
 --
--- Nothing in the application code writes guest_jobs.status = 'in_transit' or
--- 'delivered', so something outside the repo moves those. If that something
--- is a trigger keyed on delivery_confirmed_at, it will fire on the FIRST
--- stamp of a coded job and mark it delivered before the second side arrives,
--- defeating the both-stamps gate in section 3 without any error surfacing.
+-- Who writes guest_jobs.status today. When this file was written, no
+-- application code wrote 'in_transit' or 'delivered', and this section
+-- guessed that something outside the repo did. That guess is out of date:
 --
--- Run this and read the output. If a trigger of that shape exists, it needs
--- "and new.delivery_code_hash is null" added to its condition, so the RPC
--- above owns the delivered flip for coded rows and the trigger keeps owning
--- it for legacy rows.
+--   in_transit  app/api/guest/confirm-pickup/route.ts, on the sender's
+--               pickup stamp, from accepted only.
+--   delivered   section 3 above, and only for a coded job once both stamps
+--               are in.
+--
+-- No trigger on guest_jobs is evidenced in this repository. An uncoded job
+-- is never set to delivered by the app; any such row was set by hand (F14).
+--
+-- The trigger query below is kept as a standing check. A trigger keyed on
+-- delivery_confirmed_at would fire on the FIRST stamp of a coded job and
+-- mark it delivered before the second side arrives, defeating the
+-- both-stamps gate in section 3 without any error surfacing. If one ever
+-- appears, it needs "and new.delivery_code_hash is null" added to its
+-- condition, so the RPC above owns the delivered flip for coded rows.
 --
 --   select tgname, pg_get_triggerdef(oid)
 --     from pg_trigger

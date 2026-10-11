@@ -138,6 +138,7 @@ export async function POST(request: NextRequest) {
       scheduledDate,
       paymentType,
       offList,
+      declaredValueCedis,
     } = parsed.data
 
     const pickupLandmark = cleanText(parsed.data.pickupLandmark)
@@ -216,8 +217,14 @@ export async function POST(request: NextRequest) {
         payment_type: paymentType ?? null,
         quote_cedis: offList ? null : computeQuoteCedis(pickupArea, dropoffArea),
         status: offList ? "pending_quote" : "posted",
+        // Required and capped by GuestCreateBody, and capped again by the
+        // database check. Server side only: this is the one route that writes
+        // it, and no courier route returns it (lib/declared-value.ts).
+        declared_value_cedis: declaredValueCedis,
       })
-      .select()
+      // The two fields the response uses, and nothing else. A bare select()
+      // would read the whole row back, declared value included.
+      .select("tracking_id, status")
       .single()
 
     if (error || !data) {

@@ -2,73 +2,40 @@ import { NextRequest, NextResponse } from "next/server"
 import { createAdminClient } from "@/lib/supabase-admin"
 import { callerRefusalResponse, resolveCaller } from "@/lib/route-auth"
 import { GuestAcceptBody, parseJsonBody } from "@/lib/schemas"
-import { mintDeliveryCode, hashDeliveryCode } from "@/lib/delivery-code"
 import { courierSplit, recordedSplit } from "@/lib/guest-commission"
+import { effectiveTier, type LadderRow } from "@/lib/courier-ladder"
+import { claimGuestJob, passesBufferGuards, readClaimableQuote } from "@/lib/guest-claim"
 
-// Server-side guest job claim, mirroring /api/listings/accept. Verify the
-// accepter from their Supabase session token, never a client-supplied uid,
-// then claim atomically, guarded to verified, posted, unassigned rows.
+// ATTESTATION WRITE: founder review required. Accept is a status write,
+// posted to accepted (item 6, section 6.4).
+//
+// Server-side guest job claim for a Pioneer courier, on the pinet host.
+// Verify the accepter from their Supabase session token, never a
+// client-supplied uid, then look them up in the courier registry, apply the
+// ladder, and claim atomically, guarded to verified, posted, unassigned rows.
 // No Pi fee fires here: a guest job is a dispatch job, not a connection.
 // Contact fields reveal ONLY in the response to the successful accepter.
 //
-// The claim also mints the one-time delivery code. It rides the same atomic
-// update as the claim itself, so a job is never assigned without a code and
-// a code is never minted for a job the courier failed to win. Only the hash
-// is kept, and the plaintext is discarded here: it is not returned to the
-// courier, who is the one party it exists as evidence against.
+// A PIONEER COURIER IS A PIONEER FIRST (6.2). resolveCaller derives the
+// pi_username from app_metadata; courier_find_pioneer then finds the registry
+// row on lower(pi_username). The body carries no courier id, tier or role.
+// A Pioneer with no row is refused, never treated as full: every existing
+// Pioneer courier is registered by hand before this deploys (6.7 A).
 //
-// The claim also records what the courier owes Gyema. remit_cedis is computed
-// by lib/guest-commission.ts from the quote on the row, and written in the same
-// UPDATE that assigns the courier, guarded on that same quote. A job repriced
-// between the read and the write matches zero rows and is refused, so the
-// commission always belongs to the quote it was written against, and a later
-// ladder or rate change cannot move what the courier agreed to. A job with no
-// usable quote, such as an off-list job posted before it was priced, cannot be
-// claimed.
+// The claim itself, with the delivery code and the commission, is
+// lib/guest-claim.ts: one guarded UPDATE that assigns the courier, mints the
+// code and records remit_cedis, so a job is never assigned without a code and
+// the commission always belongs to the quote it was written against. The
+// plaintext code never leaves the server here: it is not returned to the
+// courier, who is the one party it exists as evidence against (finding S-4).
+//
+// remit_cedis is computed here, by lib/guest-commission.ts, from the quote on
+// the row. A job with no usable quote, such as an off-list job posted before
+// it was priced, cannot be claimed.
 export const runtime = "nodejs"
 
-// Explicit column list, same convention as /api/guest/mine. NEVER select()
-// or select("*"): guest_jobs holds sender_phone and the remit_* settlement
-// columns. Of those, remit_cedis alone reaches a client, and only this one:
-// the courier who has just claimed the job, who is the person who owes it.
-// remit_pi, remit_rate, remit_method, remit_paid_at and remit_ref never do.
-// Declared as an array so each column sits on its own line and the list stays
-// verifiable at a glance.
-//
-// 10 columns. sender_phone is not one of them and must never be added here:
-// the public tracker guards both sender confirmations with its last four
-// digits, so a courier holding it could confirm pickup and delivery on a job
-// they never carried.
-//
-// delivery_code_hash is not one of them either, and must never be added: the
-// code space is 4 digits, so the hash IS the code to anyone holding it.
-const ACCEPTED_JOB_COLUMNS = [
-  "tracking_id",
-  "pickup_area",
-  "pickup_landmark",
-  "dropoff_area",
-  "dropoff_landmark",
-  "recipient_name",
-  "recipient_phone",
-  "quote_cedis",
-  "payment_type",
-  "remit_cedis",
-].join(", ")
-
-// The row those 10 columns produce, declared for the same reason as in
-// /api/guest/mine: supabase-js cannot infer a row shape from a joined constant.
-type AcceptedJobRow = {
-  tracking_id: string
-  pickup_area: string
-  pickup_landmark: string | null
-  dropoff_area: string
-  dropoff_landmark: string | null
-  recipient_name: string | null
-  recipient_phone: string | null
-  quote_cedis: number | null
-  payment_type: string | null
-  remit_cedis: number | null
-}
+/** The registry fields courier_find_pioneer returns. */
+type PioneerCourierRow = LadderRow & { id: string }
 
 export async function POST(request: NextRequest) {
   try {
@@ -83,62 +50,62 @@ export async function POST(request: NextRequest) {
     if (!verdict.ok) return callerRefusalResponse(verdict)
     const caller = verdict.caller
 
+    // The registry row, by the username resolveCaller derived. A lookup error
+    // is 503 auth_unavailable and never falls through to "no row": a blip must
+    // not read as unregistered, and must never read as registered.
+    const { data: found, error: findError } = await admin.rpc("courier_find_pioneer", {
+      p_pi_username: caller.pi_username,
+    })
+    if (findError || (found !== null && !Array.isArray(found))) {
+      if (findError) console.error("[gyema] guest accept registry lookup error:", findError)
+      return NextResponse.json({ ok: false, reason: "auth_unavailable" }, { status: 503 })
+    }
+    const rows = (found ?? []) as PioneerCourierRow[]
+    // The unique index on lower(pi_username) allows one row. More than one is
+    // not a state this route can reason about, so it refuses rather than pick.
+    if (rows.length > 1) {
+      console.error("[gyema] guest accept registry lookup returned more than one row")
+      return NextResponse.json({ ok: false, reason: "auth_unavailable" }, { status: 503 })
+    }
+    const courier = rows[0] ?? null
+
+    const ladder = effectiveTier(courier, Date.now())
+    if (ladder.tier === "none" || !courier) {
+      const reason = ladder.tier === "none" ? ladder.reason : "courier_not_registered"
+      return NextResponse.json({ ok: false, reason }, { status: 403 })
+    }
+
     // The quote the commission is computed from, read under the same guards the
     // claim uses. Nothing is written for a job that is not claimable or has no
     // usable quote.
-    const { data: claimable, error: readError } = await admin
-      .from("guest_jobs")
-      .select("quote_cedis")
-      .eq("tracking_id", trackingId)
-      .eq("status", "posted")
-      .eq("phone_verified", true)
-      .is("assigned_courier", null)
-      .maybeSingle()
-    if (readError) console.error("[gyema] guest accept read error:", readError)
+    const claimable = await readClaimableQuote(admin, trackingId)
     const split = claimable ? courierSplit(claimable.quote_cedis) : null
-    if (!claimable || !split) {
+    if (!claimable || claimable.quote_cedis === null || !split) {
       return NextResponse.json({ ok: false, reason: "not_open" })
     }
 
-    const deliveryCode = mintDeliveryCode()
-    const { data, error } = await admin
-      .from("guest_jobs")
-      .update({
-        status: "accepted",
-        assigned_courier: caller.pi_username,
-        assigned_courier_whatsapp: accepterWhatsapp ?? null,
-        delivery_code_hash: hashDeliveryCode(deliveryCode),
-        remit_cedis: split.commissionCedis,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("tracking_id", trackingId)
-      .eq("status", "posted")
-      .eq("phone_verified", true)
-      .is("assigned_courier", null)
-      // The commission above was computed from this exact quote. If the quote
-      // changed since the read, this matches nothing and the claim is refused.
-      .eq("quote_cedis", claimable.quote_cedis)
-      .select(ACCEPTED_JOB_COLUMNS)
-      .single()
-    if (error || !data) {
-      if (error) console.error("[gyema] guest accept update error:", error)
-      return NextResponse.json({ ok: false, reason: "not_open" })
+    // A buffer courier on a job outside the buffer guards gets one reason,
+    // whether the cause is the area or the value (6.10 decision 4). This read
+    // only chooses the reason; the claim UPDATE carries the guards itself.
+    if (ladder.tier === "buffer" && !(await passesBufferGuards(admin, trackingId))) {
+      return NextResponse.json({ ok: false, reason: "not_eligible" }, { status: 403 })
     }
-    // THE PLAINTEXT CODE IS NOT IN THIS RESPONSE. It used to be, and the
-    // reasoning was that the client mapper dropped it rather than showing it
-    // in the accept sheet. That is a UI decision, not a control: the value was
-    // in the HTTP response, one glance at a network tab away (finding S-4).
-    //
-    // The code is the courier's proof that they reached the door and the
-    // recipient spoke it aloud. A courier who has it at claim time, hours
-    // before they collect anything, can stamp a delivery they never made. So
-    // it is minted here, hashed into the row here, and leaves the server only
-    // through /api/guest/delivery-code, to the sender, behind the last-4
-    // guard, for the sender to carry to the recipient.
+
+    const row = await claimGuestJob(admin, {
+      trackingId,
+      quoteCedis: claimable.quote_cedis,
+      remitCedis: split.commissionCedis,
+      assignment: {
+        assigned_courier: caller.pi_username,
+        assigned_courier_id: courier.id,
+        assigned_courier_whatsapp: accepterWhatsapp ?? null,
+      },
+      tier: ladder.tier,
+    })
+    if (!row) return NextResponse.json({ ok: false, reason: "not_open" })
 
     // The figures the courier is shown come from what was written, not from
     // the preview: remit_cedis as stored, and what they keep derived from it.
-    const row = data as unknown as AcceptedJobRow
     const recorded = recordedSplit(row.quote_cedis, row.remit_cedis)
     return NextResponse.json({
       ok: true,

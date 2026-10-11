@@ -1,4 +1,4 @@
-// Guest rail zone pricing. V1: Greater Accra only, four zones, static matrix.
+// Guest rail zone pricing. V1: Greater Accra only, five zones (A to E), static matrix.
 // Prices anchored to July 2026 Accra dispatch market rates (cross-zone 40-55,
 // Tema corridor 55-60 per delivery at incumbent services; within-zone floor ~20-25).
 // Repricing is a one-cell edit here; nothing else in the app knows prices.
@@ -75,11 +75,14 @@ export function quoteCedis(pickupArea: string, dropoffArea: string): number | nu
   return ZONE_MATRIX[key] ?? null
 }
 
-// Pioneer-rail advisory benchmark. Maps the coarse GHANA_CITIES vocabulary
-// onto zone SETS and returns the min to max GHS spread across the zone
-// cross-product. "Accra" spans zones A to C; "Tema" is the D corridor.
-// Cities outside the Greater Accra zone system return null: never guess
-// a price. Advisory only; Pioneer settlement stays in Pi.
+// Pioneer-rail advisory benchmark, city fallback. Maps "Accra" (zones A to C)
+// and "Tema" (the D corridor) onto zone SETS and returns the min to max GHS
+// spread across the zone cross-product. No form offers either value since
+// 2cfcdb5: both Pioneer forms select from TRIP_AREAS (GUEST_AREA_NAMES plus
+// "Other"), so pioneerBenchmarkCedis resolves through the exact cell, and this
+// fallback is reached only by tests. Removal is a later item. Values outside
+// these two return null: never guess a price. Advisory only; Pioneer
+// settlement stays in Pi.
 const CITY_ZONE_SETS: Record<string, GuestZone[]> = {
   Accra: ["A", "B", "C"],
   Tema: ["D"],

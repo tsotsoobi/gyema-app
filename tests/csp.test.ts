@@ -270,7 +270,8 @@ describe("the prerender trap", () => {
   })
 
   it("the nonce comes from the request headers middleware set", () => {
-    expect(layout).toContain('headers()).get("x-nonce")')
+    expect(layout).toContain("const requestHeaders = await headers()")
+    expect(layout).toContain('requestHeaders.get("x-nonce")')
   })
 
   it("says what removing the dynamic line would require", () => {

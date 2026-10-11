@@ -129,7 +129,11 @@ describe("lib/guest-commission.ts is imported by API routes and nothing else", (
     for (const f of importers) {
       expect(f, `${f} imports the commission function`).toMatch(/^app\/api\//)
     }
+    // The legacy courier's accept and mine (item 6 part (c)) are the courier
+    // host's counterparts of guest/accept and guest/mine.
     expect(importers.sort()).toEqual([
+      "app/api/courier/jobs/accept/route.ts",
+      "app/api/courier/jobs/mine/route.ts",
       "app/api/guest/accept/route.ts",
       "app/api/guest/mine/route.ts",
       "app/api/guest/open/route.ts",

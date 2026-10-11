@@ -13,6 +13,7 @@ import {
   reasonFor,
   trackingId,
 } from "@/lib/schemas"
+import { DECLARED_VALUE_CAP_CEDIS } from "@/lib/declared-value"
 
 // Phase 3. zod was a dependency from the start and imported nowhere: every
 // route hand-rolled its checks, so they differed. These test the schemas
@@ -33,6 +34,7 @@ describe("bounds", () => {
       dropoffArea: "Madina",
       packageSize: "small",
       senderPhone: "0244123456",
+      declaredValueCedis: 150,
     }
     for (const [field, length] of [
       ["pickupArea", 81],
@@ -58,6 +60,7 @@ describe("bounds", () => {
       recipientPhone: "+233 20 123 4567",
       whenPref: "today",
       paymentType: "momo",
+      declaredValueCedis: 150,
     })
     expect(parsed.success).toBe(true)
     if (parsed.success) {
@@ -83,6 +86,41 @@ describe("bounds", () => {
       paymentId: "p1",
       txid: "a".repeat(64),
     }).success).toBe(true)
+  })
+})
+
+describe("the declared value rule (item 7)", () => {
+  const base = {
+    pickupArea: "Osu",
+    dropoffArea: "Madina",
+    packageSize: "small",
+    senderPhone: "0244123456",
+  }
+
+  it("is required", () => {
+    expect(reason(GuestCreateBody, base)).toBe("invalid_declared_value")
+  })
+
+  it("takes whole cedis from 0 to the pilot cap, inclusive", () => {
+    expect(DECLARED_VALUE_CAP_CEDIS).toBe(500)
+    for (const value of [0, 1, 200, 499, 500]) {
+      expect(GuestCreateBody.safeParse({ ...base, declaredValueCedis: value }).success, String(value)).toBe(true)
+    }
+  })
+
+  it("names the cap when the value is above it", () => {
+    for (const value of [501, 1000, 1e9]) {
+      expect(reason(GuestCreateBody, { ...base, declaredValueCedis: value })).toBe("declared_value_over_cap")
+    }
+  })
+
+  it("refuses anything that is not a whole number of cedis", () => {
+    for (const value of [-1, 1.5, 0.01, Number.NaN, Number.POSITIVE_INFINITY, "150", "", null, true]) {
+      expect(
+        reason(GuestCreateBody, { ...base, declaredValueCedis: value }),
+        String(value)
+      ).toBe("invalid_declared_value")
+    }
   })
 })
 
@@ -296,9 +334,17 @@ describe("every route validates its body", () => {
     // 19 today: the original 15, the three status transitions, and
     // listings/create, which moved creation off the client so the server could
     // own posted_by_id, posted_by_username, status, tracking_id and created_at
-    // (finding S-15). The count is asserted so adding a route without adding it
-    // to this sweep fails here rather than going unvalidated.
-    expect(routes.length).toBe(19)
+    // (finding S-15). 20 with kyc/webhook, which verifies an HMAC over the raw
+    // text and then safeParses PiVerifyWebhookBody. 23 with the three courier
+    // routes of Phase 1 item 5 part (b): sign-in (CourierSignInBody), sign-out
+    // (CourierSignOutBody) and me, which takes no input but the cookie. 25
+    // with part (c): kyc/start (CourierKycStartBody) and kyc/refresh
+    // (CourierKycRefreshBody). 28 with item 6 part (c): courier/jobs/accept
+    // (CourierJobsAcceptBody), courier/jobs/mine (CourierJobsMineBody) and
+    // courier/jobs/confirm-delivery (CourierJobsConfirmDeliveryBody). The
+    // count is asserted so adding a route without adding it to this sweep
+    // fails here rather than going unvalidated.
+    expect(routes.length).toBe(28)
   })
 
   for (const file of routes) {

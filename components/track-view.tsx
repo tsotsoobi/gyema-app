@@ -17,6 +17,7 @@ import {
 import { hasStamp, STAMP_SENDER, STAMP_COURIER_CODE } from "@/lib/delivery-stamps"
 import { last4ErrorMessage, isLast4Locked } from "@/lib/last4-messages"
 import { DeliveryTracker } from "@/components/delivery-tracker"
+import { completionMessage } from "@/lib/completion-lines"
 
 // Shared tracker UI for both /track (search + ?id=) and /track/[id] (path).
 // initialId, when provided, auto-resolves on mount. Resolution mirrors
@@ -236,7 +237,7 @@ export function TrackView({ initialId = "" }: { initialId?: string }) {
             {result.kind === "guest" && (() => {
               const confirmedAt = confirmedAtLocal ?? result.pickupConfirmedAt
               if (confirmedAt) {
-                if (result.status === "delivered" || result.status === "completed") return null
+                if (result.status === "delivered") return null
                 return (
                   <div className="rounded-md p-3 space-y-1" style={{ backgroundColor: "#15803D14", border: "1px solid #15803D33" }}>
                     <p className="text-sm font-semibold" style={{ color: "#15803D" }}>Pickup confirmed</p>
@@ -311,14 +312,14 @@ export function TrackView({ initialId = "" }: { initialId?: string }) {
                   ? hasStamp(result.deliveryConfirmedBy, STAMP_SENDER)
                   : !!result.deliveryConfirmedAt
               if (senderConfirmed) {
-                if (result.status === "delivered" || result.status === "completed") return null
+                if (result.status === "delivered") return null
                 return (
                   <div className="rounded-md p-3 space-y-1" style={{ backgroundColor: "#15803D14", border: "1px solid #15803D33" }}>
                     <p className="text-sm font-semibold" style={{ color: "#15803D" }}>Delivery confirmed</p>
                     <p className="text-xs" style={{ color: "#166534" }}>
                       {result.hasDeliveryCode && !courierConfirmed
                         ? "You signed off on this delivery. It closes once the courier enters the delivery code at handover."
-                        : "You signed off on this delivery. Thanks for moving things across Gyema the safer way."}
+                        : "You signed off on this delivery. Thanks for using Gyema."}
                     </p>
                   </div>
                 )
@@ -391,11 +392,8 @@ export function TrackView({ initialId = "" }: { initialId?: string }) {
               <div className="rounded-md p-3 space-y-1" style={{ backgroundColor: "#15803D14", border: "1px solid #15803D33" }}>
                 <p className="text-sm font-semibold" style={{ color: "#15803D" }}>Delivery completed</p>
                 <p className="text-xs" style={{ color: "#166534" }}>
-                  {result.kind === "guest"
-                    ? result.hasDeliveryCode
-                      ? "You confirmed this delivery and the courier entered your delivery code at handover. Thanks for moving things across Gyema the safer way."
-                      : "You confirmed pickup and delivery. Thanks for moving things across Gyema the safer way."
-                    : "Both sender and traveller confirmed this delivery as done. Thanks for moving things across Gyema the safer way."}
+                  {/* From the stamps on the row, not the status (lib/completion-lines.ts). */}
+                  {completionMessage(result)}
                 </p>
               </div>
             )}

@@ -192,6 +192,10 @@ The Pi SDK only runs inside the Pi Browser. Opened in a normal browser, `window.
 | `PI_API_KEY` | Server-side Pi Platform API key |
 | `PIONEER_PASSWORD_SALT` | Secret for deriving Supabase passwords |
 | `CRON_SECRET` | Bearer token the Vercel cron must present |
+| `PIVERIFY_API_BASE_URL` | PiVerify API base URL (a staging domain today; config, not code, because it will change) |
+| `PIVERIFY_API_KEY` | PiVerify secret key (`sbx_` sandbox, `live_` production), server only |
+| `PIVERIFY_WEBHOOK_SECRET` | HMAC key for PiVerify webhook signatures, server only |
+| `COURIER_HOST` | This deployment's courier host, hostname only (`lib/courier-host.ts`). Unset or empty means no courier host: every courier path is refused. A change needs a redeploy. |
 
 Testnet versus Mainnet is controlled in the Pi Developer Portal app configuration and read from the Pi SDK at runtime.
 

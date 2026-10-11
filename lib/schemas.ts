@@ -1,5 +1,7 @@
 import { z } from "zod"
 import { NextResponse } from "next/server"
+import { isSigninCode, normaliseSigninCode } from "@/lib/courier-code"
+import { DECLARED_VALUE_CAP_CEDIS } from "@/lib/declared-value"
 
 // Request validation for every API route, in one file.
 //
@@ -179,6 +181,23 @@ export const piAmount = z
  */
 export const turnstileToken = z.string().trim().min(1).max(2048)
 
+/**
+ * The sender's declared value of a guest parcel, in whole cedis
+ * (lib/declared-value.ts).
+ *
+ * Whole cedis, 0 allowed: 0 is an honest declaration for documents with no
+ * resale value (founder decision, item 7, 10 October 2026). Finite and an
+ * integer, following piAmount: the form reads it from a text input. Above the
+ * pilot cap is its own reason, so the form can say what the cap is; anything
+ * else wrong is invalid_declared_value (reasonFor).
+ */
+export const declaredValueCedis = z
+  .number()
+  .finite()
+  .int()
+  .min(0)
+  .max(DECLARED_VALUE_CAP_CEDIS, { message: "declared_value_over_cap" })
+
 // ---------------------------------------------------------------------------
 // Bodies
 // ---------------------------------------------------------------------------
@@ -284,6 +303,8 @@ export const GuestCreateBody = z.object({
   paymentType: optional(paymentType),
   offList: optional(z.boolean()),
   turnstileToken: optional(turnstileToken),
+  // Required, listed and off-list alike: every new guest job (answer 6).
+  declaredValueCedis,
 })
 
 export const GuestAcceptBody = z.object({
@@ -299,6 +320,36 @@ export const GuestMineBody = z.object({
 export const GuestLast4Body = z.object({
   trackingId,
   last4,
+})
+
+/**
+ * A PiVerify webhook, after its HMAC has been checked on the raw text.
+ *
+ * Only the three fields the route acts on are read: the event id (stored, so a
+ * replay is a no-op), its type (recorded) and the session id (re-fetched from
+ * PiVerify). data.status and data.external_user_id are deliberately absent:
+ * the route takes both from the re-fetched session, never from the payload.
+ * passthrough is not used, so nothing else in the payload survives parsing.
+ */
+export const PiVerifyWebhookBody = z.object({
+  // The poll namespace (POST /api/courier/kyc/refresh, item 5, 5.4) is never
+  // occupied by a delivered event: an event id starting "poll:" or an event
+  // type of "poll" is refused here, before anything is read or written.
+  id: z
+    .string()
+    .trim()
+    .min(1)
+    .max(128)
+    .refine((v) => !v.startsWith("poll:"), { message: "bad_payload" }),
+  type: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .refine((v) => v !== "poll", { message: "bad_payload" }),
+  data: z.object({
+    session_id: z.string().trim().min(1).max(128),
+  }),
 })
 
 export const GuestConfirmDeliveryBody = z
@@ -318,6 +369,55 @@ export const GuestConfirmDeliveryBody = z
   .refine((b) => b.via !== "courier_code" || typeof b.code === "string", {
     message: "invalid_code",
   })
+
+/**
+ * An operator-issued courier sign-in code, as a courier types it: ASCII
+ * letters, digits, dashes and spaces, at most 32 characters. Normalised as the
+ * SQL normalises it (lib/courier-code.ts) and then required to be ten
+ * characters of the alphabet, so a code that cannot exist is refused here and
+ * never hashed or sent to the database. The parsed value is the normalised
+ * code.
+ */
+export const courierSigninCode = z
+  .string()
+  .max(32)
+  .regex(/^[0-9A-Za-z -]*$/, { message: "invalid_code" })
+  .transform(normaliseSigninCode)
+  .refine(isSigninCode, { message: "invalid_code" })
+
+/** POST /api/courier/sign-in. Strict: the code and nothing else. */
+export const CourierSignInBody = z.object({ code: courierSigninCode }).strict()
+
+/**
+ * POST /api/courier/sign-out. An empty object: the session is the cookie, and
+ * nothing in the body names it.
+ */
+export const CourierSignOutBody = z.object({}).strict()
+
+/**
+ * POST /api/courier/kyc/start and POST /api/courier/kyc/refresh. Empty
+ * objects: the courier is the cookie, and the session to start or poll is
+ * read from their row, never named in the body.
+ */
+export const CourierKycStartBody = z.object({}).strict()
+export const CourierKycRefreshBody = z.object({}).strict()
+
+/**
+ * POST /api/courier/jobs/accept (item 6, 6.10 decision 9): the tracking id
+ * and nothing else. No WhatsApp number is collected from a legacy courier,
+ * and nothing in the body names a courier, a tier or a role.
+ */
+export const CourierJobsAcceptBody = z.object({ trackingId }).strict()
+
+/** POST /api/courier/jobs/mine. An empty object: the courier is the cookie. */
+export const CourierJobsMineBody = z.object({}).strict()
+
+/**
+ * POST /api/courier/jobs/confirm-delivery (6.3). The tracking id and the code
+ * the recipient spoke. No `via`: this route is only ever the courier_code
+ * stamp.
+ */
+export const CourierJobsConfirmDeliveryBody = z.object({ trackingId, code: deliveryCode }).strict()
 
 // ---------------------------------------------------------------------------
 // Parsing
@@ -352,6 +452,7 @@ export function reasonFor(error: z.ZodError): string {
     "invalid_phone",
     "invalid_date",
     "bad_txid",
+    "declared_value_over_cap",
   ])
   if (typeof issue.message === "string" && named.has(issue.message)) {
     return issue.message
@@ -379,6 +480,10 @@ export function reasonFor(error: z.ZodError): string {
       return "bad_size"
     case "paymentType":
       return "bad_payment"
+    // Missing, negative, fractional or not a number. Above the cap carries
+    // its own message, declared_value_over_cap, and is named above.
+    case "declaredValueCedis":
+      return "invalid_declared_value"
     case "senderPhone":
     case "recipientPhone":
     case "accepterWhatsapp":

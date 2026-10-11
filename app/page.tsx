@@ -201,6 +201,8 @@ export default function Gyema() {
           user={user}
           role={role}
           refreshKey={refreshKey}
+          onCreated={triggerRefresh}
+          onSignedIn={handleSignedIn}
           onNavigate={setActiveTab}
         />
       )}

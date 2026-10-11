@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase-admin"
 import { callerRefusalResponse, resolveCaller } from "@/lib/route-auth"
 import { GuestMineBody, parseJsonBody } from "@/lib/schemas"
 import { recordedSplit } from "@/lib/guest-commission"
+import { readCourierJobs, recipientWithheld } from "@/lib/guest-claim"
 
 // The courier's own accepted guest jobs. Before this route the accept sheet
 // was the only view of a claimed job, so the job vanished when the sheet
@@ -19,71 +20,13 @@ import { recordedSplit } from "@/lib/guest-commission"
 //
 // Runs with the service_role admin client because guest_jobs has RLS enabled
 // with no public policy, same as every other guest route.
+//
+// The read and its column list live in lib/guest-claim.ts, shared with the
+// legacy courier's own list on the courier host. This route matches on
+// assigned_courier, the Pioneer's pi_username, as it always has. It does not
+// consult the courier registry: a Pioneer always sees the jobs already
+// assigned to them, whatever their tier (6.10 decision 8).
 export const runtime = "nodejs"
-
-// Explicit column list. NEVER select() or select("*"): guest_jobs holds
-// sender_phone and the remit_* settlement columns (remit_cedis, remit_pi,
-// remit_rate, remit_method, remit_paid_at, remit_ref). Of those, remit_cedis
-// alone reaches a client, and only the courier this route has matched as the
-// job's assigned_courier, who is the person who owes it. remit_pi,
-// remit_rate, remit_method, remit_paid_at and remit_ref never do. Declared as
-// an array so each column sits on its own line and the list stays verifiable
-// at a glance.
-//
-// 19 columns. sender_phone is not one of them and must never be added here.
-//
-// delivery_code_hash is the one column selected for something other than
-// display: the mapper below emits its NULLITY as hasDeliveryCode and drops
-// the value. It must never be mapped through. The code space is 4 digits, so
-// handing the hash to the courier hands them the code, and a code the courier
-// already knows is no longer evidence they reached the door.
-const COURIER_JOB_COLUMNS = [
-  "tracking_id",
-  "pickup_area",
-  "pickup_landmark",
-  "dropoff_area",
-  "dropoff_landmark",
-  "package_size",
-  "recipient_name",
-  "recipient_phone",
-  "quote_cedis",
-  "payment_type",
-  "remit_cedis",
-  "when_pref",
-  "scheduled_date",
-  "status",
-  "pickup_confirmed_at",
-  "pickup_confirmed_by",
-  "delivery_confirmed_at",
-  "delivery_confirmed_by",
-  "delivery_code_hash",
-].join(", ")
-
-// The row those 19 columns produce. Declared explicitly because supabase-js
-// can only infer a row shape from a string LITERAL passed to .select(); given
-// a joined constant it falls back to GenericStringError and the mapper below
-// stops typechecking. Keep this in sync with COURIER_JOB_COLUMNS.
-type GuestJobRow = {
-  tracking_id: string
-  pickup_area: string
-  pickup_landmark: string | null
-  dropoff_area: string
-  dropoff_landmark: string | null
-  package_size: string
-  recipient_name: string | null
-  recipient_phone: string | null
-  quote_cedis: number | null
-  payment_type: string | null
-  remit_cedis: number | null
-  when_pref: string | null
-  scheduled_date: string | null
-  status: string
-  pickup_confirmed_at: string | null
-  pickup_confirmed_by: string | null
-  delivery_confirmed_at: string | null
-  delivery_confirmed_by: string | null
-  delivery_code_hash: string | null
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -110,22 +53,13 @@ export async function POST(request: NextRequest) {
 
     // Assignment is the ONLY filter. No status filter, so a job stays
     // findable through its whole life: accepted, in transit, delivered.
-    const { data, error } = await admin
-      .from("guest_jobs")
-      .select(COURIER_JOB_COLUMNS)
-      .eq("assigned_courier", caller.pi_username)
-      .order("created_at", { ascending: false })
-      .limit(20)
-
-    if (error) {
-      console.error("[gyema] guest courier jobs error:", error)
-      return NextResponse.json({ ok: false }, { status: 500 })
-    }
+    const read = await readCourierJobs(admin, { column: "assigned_courier", value: caller.pi_username })
+    if (!read.ok) return NextResponse.json({ ok: false }, { status: 500 })
 
     // Zero rows is a successful read, not a 404: a courier who has accepted
     // nothing yet gets ok:true with an empty list, and the UI renders no
     // section at all.
-    const rows = (data ?? []) as unknown as GuestJobRow[]
+    const rows = read.rows
     return NextResponse.json({
       ok: true,
       jobs: rows.map((j) => {
@@ -133,6 +67,9 @@ export async function POST(request: NextRequest) {
         // rate shows its recorded figure and no rate label; a job with nothing
         // recorded shows no split at all.
         const owed = recordedSplit(j.quote_cedis, j.remit_cedis)
+        // A cancelled job keeps no recipient contact on the courier's screen
+        // (6.5). The row is untouched; only this response withholds them.
+        const withheld = recipientWithheld(j.status)
         return {
           kind: "guest",
           trackingId: j.tracking_id,
@@ -141,8 +78,8 @@ export async function POST(request: NextRequest) {
           dropoffArea: j.dropoff_area,
           dropoffLandmark: j.dropoff_landmark,
           packageSize: j.package_size,
-          recipientName: j.recipient_name,
-          recipientPhone: j.recipient_phone,
+          recipientName: withheld ? null : j.recipient_name,
+          recipientPhone: withheld ? null : j.recipient_phone,
           quoteCedis: j.quote_cedis,
           remitCedis: owed?.commissionCedis ?? null,
           keepsCedis: owed?.keepsCedis ?? null,
