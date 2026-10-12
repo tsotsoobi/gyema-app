@@ -2,7 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { CourierJobs } from "./courier-jobs"
-import { bufferWindowLapsed, type EffectiveTier } from "./courier-view"
+import {
+  OPERATOR_CHECK_ENDED_LINE,
+  PIVERIFY_NOT_OPEN_LINE,
+  bufferWindowLapsed,
+  operatorCheckLines,
+  showPiverifyNotOpen,
+  type EffectiveTier,
+} from "./courier-view"
 
 // The courier page's interactive part: sign-in with the code the founder
 // sent, then the status card (Phase 1 item 5, 5.2), with the verification
@@ -26,7 +33,14 @@ import { bufferWindowLapsed, type EffectiveTier } from "./courier-view"
 // job board while /api/courier/me's effectiveTier is buffer or full. The
 // tier decides, never the stored status (./courier-view.ts).
 //
-// Copy approved 11 Oct 2026 (8.17): every visible string here.
+// PIVERIFY OFF (item 10, decision 10). While /api/courier/me says
+// piverifyEnabled is false, the button is hidden, the not-open line is shown in
+// its place, and nothing polls kyc/refresh. The OPERATOR CHECK lines
+// come from ./courier-view.ts. None of them says the
+// courier is verified: the operator check is not identity verification.
+//
+// Copy approved 11 Oct 2026 (8.17): every visible string here. The item 10
+// strings in ./courier-view.ts: Copy approved 12 Oct 2026 (item 10).
 //
 // Like everything under app/courier, this file must not import lib/pi-network
 // or load the Pi SDK (tests/courier-host.test.ts).
@@ -38,6 +52,9 @@ type Courier = {
   piverifyAllowedAction: string | null
   canStartKyc: boolean
   effectiveTier: EffectiveTier
+  operatorChecked: boolean
+  operatorCheckDeadline: string | null
+  piverifyEnabled: boolean
 }
 
 type View =
@@ -79,6 +96,7 @@ const KYC_ERRORS: Record<string, string> = {
   unavailable: "This courier account cannot start verification.",
   rate_limited: "Too many attempts today. Try again tomorrow.",
   limiter_unavailable: "We could not start verification just now. Try again in a few minutes.",
+  piverify_not_enabled: PIVERIFY_NOT_OPEN_LINE,
 }
 
 const POLL_INTERVAL_MS = 60_000
@@ -140,16 +158,17 @@ export function CourierPanel() {
     void load()
   }, [load])
 
-  // Once on load, while the result is unsettled.
-  const unsettled = view.kind === "signed_in" && isUnsettled(view.courier)
+  // Once on load, while the result is unsettled. Never while PiVerify is off.
+  const unsettled = view.kind === "signed_in" && view.courier.piverifyEnabled && isUnsettled(view.courier)
   useEffect(() => {
     if (!unsettled || polledOnLoad.current) return
     polledOnLoad.current = true
     void pollThenLoad()
   }, [unsettled, pollThenLoad])
 
-  // Every 60 seconds while the waiting screen is open.
-  const waiting = view.kind === "signed_in" && view.courier.piverifyStatus === "pending_review"
+  // Every 60 seconds while the waiting screen is open. Never while PiVerify is off.
+  const waiting =
+    view.kind === "signed_in" && view.courier.piverifyEnabled && view.courier.piverifyStatus === "pending_review"
   useEffect(() => {
     if (!waiting) return
     const timer = setInterval(() => void pollThenLoad(), POLL_INTERVAL_MS)
@@ -301,7 +320,17 @@ export function CourierPanel() {
           Your verification has been submitted. We are waiting for the result. This page checks again every minute.
         </p>
       )}
-      {courier.canStartKyc && !waiting && (
+      {operatorCheckLines(courier).map((line) => (
+        <p key={line} className="text-sm text-muted-foreground">
+          {line}
+        </p>
+      ))}
+      {showPiverifyNotOpen(courier) && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {PIVERIFY_NOT_OPEN_LINE}
+        </p>
+      )}
+      {courier.piverifyEnabled && courier.canStartKyc && !waiting && (
         <button
           type="button"
           onClick={startVerification}
@@ -326,7 +355,9 @@ export function CourierPanel() {
       )}
       {bufferWindowLapsed(courier.status, courier.effectiveTier) && (
         <p role="status" className="text-sm text-muted-foreground">
-          Your verification has taken longer than 30 days. Jobs are paused until it completes.
+          {courier.operatorChecked
+            ? OPERATOR_CHECK_ENDED_LINE
+            : "Your verification has taken longer than 30 days. Jobs are paused until it completes."}
         </p>
       )}
       <CourierJobs effectiveTier={courier.effectiveTier} onSignedOut={signedOut} />

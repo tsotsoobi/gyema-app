@@ -28,12 +28,39 @@ const BUFFER_WINDOW_MS = BUFFER_WINDOW_DAYS * 24 * 60 * 60 * 1000
 /**
  * The registry fields the ladder reads. shredded_at is optional because
  * courier_find_pioneer never returns a shredded row, so the Pioneer route has
- * no such field to pass.
+ * no such field to pass. operator_checked_at and operator_check_deadline are
+ * optional for the same reason: only a legacy courier can carry them
+ * (courier_registry_operator_checked_legacy_only_check, P18), and the Pioneer
+ * route passes neither.
  */
 export type LadderRow = {
   status: string
   buffer_since: string | null
   shredded_at?: string | null
+  operator_checked_at?: string | null
+  operator_check_deadline?: string | null
+}
+
+/**
+ * In buffer through the operator check (item 10, option B, notes 10.5): the
+ * row was checked, is buffer, and its clock is the check's own.
+ * courier_record_operator_check writes buffer_since and operator_checked_at
+ * from one now(), so they are equal; a courier who later came back through
+ * PiVerify carries a buffer_since of its own and is on the 30-day rule again.
+ *
+ * Compared as the strings the database returned, not as parsed times: both
+ * are the same column type, so equal values print identically, and parsing
+ * to milliseconds would call two different microseconds equal.
+ *
+ * Never a statement that the courier is verified. The check is not KYC.
+ */
+export function throughOperatorCheck(row: LadderRow): boolean {
+  return (
+    row.status === "buffer" &&
+    typeof row.operator_checked_at === "string" &&
+    row.operator_checked_at !== "" &&
+    row.buffer_since === row.operator_checked_at
+  )
 }
 
 /** Why a courier may claim nothing. Each is a 403 reason as written. */
@@ -51,13 +78,17 @@ export type EffectiveTier =
  *   shredded_at set               none, unavailable
  *   registered, paused            none, courier_not_active
  *   buffer, buffer_since null     none, courier_not_active (fails closed)
+ *   buffer through the operator   buffer while operator_check_deadline is
+ *     check (item 10, option B)   null; at or after the deadline, none,
+ *                                 courier_not_active. Not on the 30-day rule.
  *   buffer, 30 days or more       none, courier_not_active
  *   buffer, inside 30 days        buffer
  *   full                          full
  *   anything else                 none, courier_not_active
  *
  * nowMs is the route's Date.now(). A buffer_since that does not parse as a
- * time fails closed, like a null one.
+ * time fails closed, like a null one. So does a set operator_check_deadline
+ * that does not parse; a null one means the sunset has not started.
  */
 export function effectiveTier(row: LadderRow | null, nowMs: number): EffectiveTier {
   if (!row) return { tier: "none", reason: "courier_not_registered" }
@@ -71,6 +102,13 @@ export function effectiveTier(row: LadderRow | null, nowMs: number): EffectiveTi
       const since = Date.parse(row.buffer_since)
       if (!Number.isFinite(since) || !Number.isFinite(nowMs)) {
         return { tier: "none", reason: "courier_not_active" }
+      }
+      if (throughOperatorCheck(row)) {
+        const deadline = row.operator_check_deadline
+        if (deadline === null || deadline === undefined) return { tier: "buffer" }
+        const until = Date.parse(deadline)
+        if (!Number.isFinite(until) || nowMs >= until) return { tier: "none", reason: "courier_not_active" }
+        return { tier: "buffer" }
       }
       if (nowMs - since >= BUFFER_WINDOW_MS) return { tier: "none", reason: "courier_not_active" }
       return { tier: "buffer" }

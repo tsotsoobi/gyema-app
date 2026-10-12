@@ -1,0 +1,2 @@
+# Shell scripts under db/probes run in bash, which refuses CRLF line endings.
+db/probes/**/*.sh text eol=lf

@@ -493,3 +493,43 @@ describe("every jobs route", () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// Item 10, option B: the accept route reads the two operator columns
+// ---------------------------------------------------------------------------
+
+describe("POST /api/courier/jobs/accept, item 10", () => {
+  it("reads operator_checked_at and operator_check_deadline, never operator_checked_by", async () => {
+    acceptFixture({ status: "full", buffer_since: null, shredded_at: null }, [{ data: CLAIMED, error: null }])
+    await post.accept()
+    expect(mock.trace()).toContain('select("status, buffer_since, shredded_at, operator_checked_at, operator_check_deadline")')
+    expect(mock.trace().join("\n")).not.toContain("operator_checked_by")
+  })
+
+  it("a courier in buffer through the check claims on day 40 while no deadline is set, under the buffer guards", async () => {
+    const t = new Date(NOW - 40 * DAY).toISOString()
+    acceptFixture(
+      { status: "buffer", buffer_since: t, shredded_at: null, operator_checked_at: t, operator_check_deadline: null },
+      [{ data: CLAIMED, error: null }]
+    )
+    const res = await post.accept()
+    expect(res.status).toBe(200)
+    expect(updateGuards().some((g) => g.startsWith("lte("))).toBe(true)
+  })
+
+  it("is refused courier_not_active at and after the deadline, without reading the job", async () => {
+    const t = new Date(NOW - 10 * DAY).toISOString()
+    for (const deadline of [new Date(NOW).toISOString(), new Date(NOW - DAY).toISOString()]) {
+      mock.calls = []
+      signedIn()
+      mock.queue({
+        data: { status: "buffer", buffer_since: t, shredded_at: null, operator_checked_at: t, operator_check_deadline: deadline },
+        error: null,
+      })
+      const res = await post.accept()
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ ok: false, reason: "courier_not_active" })
+      expect(mock.trace()).not.toContain('from("guest_jobs")')
+    }
+  })
+})

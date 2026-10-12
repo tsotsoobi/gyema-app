@@ -99,6 +99,9 @@ beforeEach(() => {
   checkLimit.mockReset()
   checkLimit.mockImplementation(async () => ({ ok: true as const }))
   vi.stubEnv("COURIER_HOST", HOST)
+  // PiVerify on (item 10, decision 10), so canStartKyc reads the 5.4 table
+  // as before. The off path is tested in tests/operator-check.test.ts.
+  vi.stubEnv("PIVERIFY_ENABLED", "true")
 })
 
 afterEach(() => {
@@ -479,7 +482,7 @@ describe("GET /api/courier/me", () => {
     kyc_approved_at: null,
   }
 
-  it("returns the reference, status, piverify status, allowed action and canStartKyc, and nothing else", async () => {
+  it("returns the reference, status, piverify status, allowed action, canStartKyc and the item 10 fields, and nothing else", async () => {
     mock.queueRpc({ data: [LIVE_ROW], error: null })
     mock.queue({ data: KYC_ROW, error: null })
     const res = await me.GET(req("/api/courier/me", { method: "GET", cookie }) as never)
@@ -495,6 +498,9 @@ describe("GET /api/courier/me", () => {
         piverifyAllowedAction: "RESUBMIT",
         canStartKyc: true,
         effectiveTier: "none",
+        operatorChecked: false,
+        operatorCheckDeadline: null,
+        piverifyEnabled: true,
       },
     })
     // Never the whole id.
@@ -504,7 +510,8 @@ describe("GET /api/courier/me", () => {
     expect(mock.trace()).toContain('from("courier_registry")')
     expect(mock.trace()).toContain(`eq("id", "${COURIER_ID}")`)
     expect(mock.selectedColumns()).toBe(
-      "paused_reason, buffer_since, piverify_session_id, piverify_status, piverify_allowed_action, kyc_approved_at"
+      "paused_reason, buffer_since, piverify_session_id, piverify_status, piverify_allowed_action, kyc_approved_at, "
+        + "operator_checked_at, operator_check_deadline"
     )
   })
 
@@ -545,7 +552,7 @@ describe("GET /api/courier/me", () => {
 
     it("uses effectiveTier from lib/courier-ladder.ts, not a copy of the rule", () => {
       const src = readFileSync("app/api/courier/me/route.ts", "utf8")
-      expect(src).toMatch(/import \{ effectiveTier \} from "@\/lib\/courier-ladder"/)
+      expect(src).toMatch(/import \{ effectiveTier\b[^}]*\} from "@\/lib\/courier-ladder"/)
       expect(src).toContain("Date.now()")
     })
   })
@@ -641,5 +648,86 @@ describe("the files part (b) adds name no network", () => {
     ]) {
       expect(readFileSync(f, "utf8"), f).not.toMatch(NETWORK_SCAN)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Item 10: /api/courier/me's three fields, and canStartKyc while PiVerify is off
+// ---------------------------------------------------------------------------
+
+describe("GET /api/courier/me, item 10", () => {
+  const cookie = `__Host-gyema_courier=${TOKEN}`
+  const NOW = Date.UTC(2026, 9, 12, 12, 0, 0)
+  const DAY = 24 * 60 * 60 * 1000
+  const KYC = {
+    paused_reason: null,
+    piverify_session_id: null,
+    piverify_status: null,
+    piverify_allowed_action: null,
+    kyc_approved_at: null,
+  }
+
+  async function meFor(status: string, row: Record<string, unknown>) {
+    vi.spyOn(Date, "now").mockReturnValue(NOW)
+    mock.queueRpc({ data: [{ ...LIVE_ROW, status, piverify_status: null, piverify_allowed_action: null }], error: null })
+    mock.queue({ data: { ...KYC, ...row }, error: null })
+    const body = await (await me.GET(req("/api/courier/me", { method: "GET", cookie }) as never)).json()
+    vi.mocked(Date.now).mockRestore()
+    return body.courier
+  }
+
+  it("reports piverifyEnabled both ways, and canStartKyc false whenever it is off", async () => {
+    vi.stubEnv("PIVERIFY_ENABLED", "true")
+    expect(await meFor("registered", {})).toMatchObject({ piverifyEnabled: true, canStartKyc: true })
+    for (const off of ["false", "", "TRUE"]) {
+      vi.stubEnv("PIVERIFY_ENABLED", off)
+      // Rows decideKycStart would answer create, and continue.
+      expect(await meFor("registered", {}), off).toMatchObject({ piverifyEnabled: false, canStartKyc: false })
+      expect(
+        await meFor("registered", { piverify_session_id: "ks_0123456789abcdef", piverify_status: "started" }),
+        off
+      ).toMatchObject({ piverifyEnabled: false, canStartKyc: false })
+    }
+  })
+
+  it("a courier in buffer through the check: operatorChecked true, buffer on day 40 while no deadline is set", async () => {
+    const t = new Date(NOW - 40 * DAY).toISOString()
+    expect(await meFor("buffer", { buffer_since: t, operator_checked_at: t, operator_check_deadline: null })).toMatchObject({
+      status: "buffer",
+      effectiveTier: "buffer",
+      operatorChecked: true,
+      operatorCheckDeadline: null,
+    })
+  })
+
+  it("past the deadline: none, still operatorChecked, the deadline reported", async () => {
+    const t = new Date(NOW - 10 * DAY).toISOString()
+    const deadline = new Date(NOW - 1).toISOString()
+    expect(await meFor("buffer", { buffer_since: t, operator_checked_at: t, operator_check_deadline: deadline })).toMatchObject({
+      effectiveTier: "none",
+      operatorChecked: true,
+      operatorCheckDeadline: deadline,
+    })
+  })
+
+  it("never selects or returns operator_checked_by", async () => {
+    const courier = await meFor("buffer", {
+      buffer_since: "2026-10-01T00:00:00Z",
+      operator_checked_at: "2026-10-01T00:00:00Z",
+      operator_checked_by: "founder",
+    })
+    expect(mock.selectedColumns()).not.toContain("operator_checked_by")
+    expect(JSON.stringify(courier)).not.toMatch(/founder|checked_?by/i)
+    expect(Object.keys(courier).sort()).toEqual([
+      "canStartKyc",
+      "effectiveTier",
+      "operatorCheckDeadline",
+      "operatorChecked",
+      "piverifyAllowedAction",
+      "piverifyEnabled",
+      "piverifyStatus",
+      "reference",
+      "status",
+    ])
   })
 })

@@ -2335,3 +2335,363 @@ Built 11 Oct 2026. Two migrations, P16 and P17 in `docs/deploy-order.md`. P17 ap
   - After apply, a bad insert or update is refused with 23514 naming the check. A `pending_quote` insert and an operator hand pause are still accepted.
 - **Also in this pass.** The four pre-existing `tsc` errors are cleared (`589c59b`), and `npm run security` now ends with `tsc --noEmit` (`095fdba`), so any new type error fails the gate.
 - **Mirroring:** neither migration names a network, so both mirror as bytes.
+
+## Item 10 (design, 12 October 2026): operator-checked buffer for legacy couriers
+
+Design only. No code, no SQL file, no migration written. Built on `design/operator-checked-buffer` off main `c8b5384`. Every column, constraint and function name below was copied from the migrations at `c8b5384`, with file and line.
+
+**Why.** PiVerify API access has never authenticated for Gyema's account (GitHub issue pi-apps/pi-platform-docs #618, open since 18 July, no reply). The legacy ladder moves a courier from `registered` to `buffer` only on PiVerify `pending_review` (`db/migrations/2026-10-08_piverify_resubmission.sql:271-272`), so no legacy courier can reach a job.
+
+### 10.0 Founder decisions, 12 October 2026 (verbatim)
+
+1. An in-person operator check moves a legacy courier from registered to BUFFER ONLY (guest jobs, both areas on the list, declared value up to GHS 200). Full still requires PiVerify approval (kyc_approved_at). A legacy courier is never vouched to full.
+2. Sight only: the founder sees the Ghana Card in person. Store only when the check happened and who did it. No ID number, no photo, nothing about the document.
+3. Sunset: once PiVerify authenticates, operator-checked couriers must complete PiVerify within a set number of days or be paused. The number of days is decided at design review.
+4. Scope: only riders the founder personally knows (met, phone known).
+
+The buffer limits in decision 1 are already the ladder's buffer limits, so nothing new enforces them: `bufferJobGuards` in `lib/courier-ladder.ts:106-111` requires both areas on `GUEST_AREA_NAMES` and `declared_value_cedis` at or below `BUFFER_VALUE_CAP_CEDIS`, which is 200 (`lib/declared-value.ts:28`). A null declared value fails the comparison and counts as over the cap.
+
+### 10.1 What is there today, and the two things that would break
+
+The table is `public.courier_registry` (P2, `db/migrations/2026-10-08_courier_registry.sql`), with `status` held to `registered`, `buffer`, `full`, `paused` by `courier_registry_status_check` (`:109-110`) and `paused_reason` to `rejected`, `failed`, `pending_timeout`, `operator` by `courier_registry_paused_reason_check` (`:118-120`). P9 added `piverify_allowed_action` and `courier_registry_piverify_allowed_action_check`; P13 added `vouched_at` and `courier_registry_vouched_pioneer_only_check` (`2026-10-09_guest_jobs_courier_assignment.sql:156,166`); P17 added `courier_registry_full_needs_approval_check` and `courier_registry_buffer_needs_since_check` (`2026-10-11_courier_registry_timing_checks.sql:127,137`). Seventeen columns and fifteen constraints today, per catalog check 14's expectation.
+
+Reading the code against the decisions finds two things that would undo an operator check without anyone touching it. Both are designed around below.
+
+- **The first "Start verification" tap would drop the courier out of buffer.** `courier_bind_piverify_session` resets status and the clock on every successful bind, `2026-10-08_courier_piverify_bind.sql:165-167`:
+
+  ```
+         buffer_since            = null,
+         status                  = case when coalesce(r.paused_reason, '') = 'operator'
+                                        then r.status else 'registered' end,
+  ```
+
+  An operator-checked courier has no bound session, so `decideKycStart` (`lib/courier-kyc.ts:94-99`) answers `create`, the route binds, and the courier is back at `registered` with no jobs. The file says the reset is on purpose (`:55-57`): it stops a new session's 30-day clock starting from an old one. That reason does not apply to a courier whose buffer comes from the check (10.4).
+
+- **The ladder would lock them out on day 30 while PiVerify is still down.** `effectiveTier` refuses any buffer courier at 30 days from `buffer_since` (`lib/courier-ladder.ts:69-76`), computed on read (decision 7). With PiVerify unreachable there is no way to finish, so every operator-checked courier would stop on the same day of the month they were checked.
+
+### 10.2 (a) Schema
+
+Three columns on `public.courier_registry`, all `timestamptz null` or `text null`, added with `add column if not exists`, every existing row null:
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `operator_checked_at` | `timestamptz` | null | When the in-person check happened. Set once, by the function in 10.3, never changed after. |
+| `operator_checked_by` | `text` | null | Who did it, as a role label, not a name. Today the only value is `founder`. |
+| `operator_check_deadline` | `timestamptz` | null | The sunset deadline (10.6). Null until the founder starts the sunset. |
+
+Four named checks, each guarded on `pg_constraint` by name as P13 and P17 do:
+
+- `courier_registry_operator_checked_legacy_only_check`: `operator_checked_at is null or class = 'legacy'`. The mirror of `courier_registry_vouched_pioneer_only_check`: a Pioneer is vouched, never operator-checked, and a hand UPDATE cannot do either to the wrong class.
+- `courier_registry_operator_check_pair_check`: `(operator_checked_at is null) = (operator_checked_by is null)`. Never a time without a who, or the reverse.
+- `courier_registry_operator_checked_by_check`: `operator_checked_by is null or operator_checked_by in ('founder')`. A closed list, so no free text (and so no name) can land there. A second operator is a migration, not a typo.
+- `courier_registry_operator_check_deadline_check`: `operator_check_deadline is null or operator_checked_at is not null`. A deadline belongs to a check.
+
+No check ties the new columns to `status`, for the same reason P2 gave for its timing rules (`2026-10-08_courier_registry.sql:79-83`): the founder sets status by hand (decision 7), and a courier who was checked and later paused or approved keeps the record of the check.
+
+After P18: twenty columns and nineteen constraints. Indexes unchanged.
+
+Nothing on the table changes its grants: service_role already holds SELECT, INSERT and UPDATE table-wide (`2026-10-08_courier_registry.sql`, section 3), and the app never writes these columns.
+
+### 10.3 (b) The check function
+
+Name and signature: `public.courier_record_operator_check(p_courier_id uuid, p_checked_by text)`, returning `table (courier_id uuid, outcome text, status text, buffer_since timestamptz, operator_checked_at timestamptz)`.
+
+Style. Owner only, like `courier_register_legacy`, `courier_issue_signin_code`, `courier_revoke_sessions` and `courier_register_pioneer`: `language plpgsql`, `security definer`, `set search_path = public, pg_temp`, EXECUTE revoked from `public, anon, authenticated, service_role` and granted to nobody (the pattern of `2026-10-08_courier_signin.sql:551-556`). The SQL editor runs as the owner; the app's service_role key cannot call it. It locks the courier row first, the way `courier_issue_signin_code` does (`2026-10-08_courier_signin.sql:282-284`, `select * into v_courier ... for update`). `courier_register_legacy` itself is an INSERT and locks nothing; it is the model for the privileges, not for the lock. Marked IDENTITY WRITE and ATTESTATION WRITE: founder review required.
+
+Before the row lock, the function takes a transaction-level advisory lock with a fixed key, the same key `courier_start_operator_check_sunset` takes first (10.6). The two then run one after the other, so a check cannot commit in the gap after the sunset has picked its rows and land with no deadline, exempt for good.
+
+Guards, in this order, after the lock. Every refusal raises, so a refused call writes nothing and the editor shows red:
+
+| # | Condition | SQLSTATE | Message ends |
+| --- | --- | --- | --- |
+| 1 | `p_checked_by` null or not in the list (`founder`, decision 7) | 22023 | `bad_checked_by` |
+| 2 | no row for `p_courier_id` | P0002 | `unknown_courier` |
+| 3 | `shredded_at` set | 55000 | `shredded` |
+| 4 | `class <> 'legacy'` | 55000 | `not_legacy` (a Pioneer is vouched with `courier_register_pioneer`, never checked) |
+| 5 | `operator_checked_at` already set | none: not a refusal | returns `already_checked`, see re-run |
+| 6 | any row of `courier_registry` has `operator_check_deadline` not null | 55000 | `sunset_started` (decision 6: once the sunset has started, no new checks) |
+| 7 | `status <> 'registered'` | 55000 | `not_registered` (buffer, full and paused are all refused here) |
+| 8 | `paused_reason` not null | 55000 | `paused` (an operator pause can sit on a registered row: the bind keeps it, `courier_piverify_bind.sql:166-169`) |
+| 9 | `kyc_approved_at` not null | 55000 | `already_approved` (cannot coexist with `registered` today; checked anyway, since this function writes) |
+| 10 | `piverify_status in ('rejected', 'failed')` | 55000 | `piverify_refused` (decision 5: a PiVerify refusal on the current session outranks a sight check) |
+| 11 | no row in `public.courier_sessions` with this `courier_id` | 55000 | `never_signed_in` (decision 11) |
+
+Guard 6 sits after guard 5, so a re-run on a courier checked before the sunset still answers `already_checked` rather than an error. It reads the sunset as started from the rows themselves (decision 3), with no flag of its own; 10.6 covers the case where the sunset finds no row to mark.
+
+Guard 11 counts any session row, live, expired or revoked: a session row exists only once a code is redeemed, since `courier_sessions.code_id` is `not null` (`2026-10-08_courier_signin.sql:137-140`). It proves the code the founder issued reached the person, not that the session is still live. The sessions table is read, not locked; the lock order of item 5 (registry row first) is kept.
+
+Each message starts `courier_record_operator_check:` and ends with the code word, so the probes and the founder can match it.
+
+What it writes, in one UPDATE on the locked row, with RETURNING (invariant 8):
+
+- `status = 'buffer'`
+- `buffer_since = now()`
+- `operator_checked_at = now()`
+- `operator_checked_by = p_checked_by`
+- `updated_at = now()`
+
+`now()` is the transaction start, so `buffer_since` and `operator_checked_at` are equal to the microsecond. 10.5 relies on that. `courier_registry_buffer_needs_since_check` is satisfied by the same statement. Nothing else changes: no session, no code, no PiVerify column, no `vouched_at`.
+
+Return value: one row, outcome `checked`, with the courier id and the status, `buffer_since` and `operator_checked_at` as written. The founder then reads the row back by id, which is invariant 8's second half; the read-back statement is drafted with the migration.
+
+Re-run: guard 5 comes before the status guard on purpose. A second call on a checked courier writes nothing and returns one row with outcome `already_checked` and the stored values, whatever the status is now. It never moves `buffer_since` or `operator_checked_at`, so running it twice cannot restart a clock. A courier checked, then paused by hand, is not re-admitted by a re-run.
+
+Guards it does not have, because they cannot be expressed in data (decision 4): that the founder met the rider and knows their phone. That is the founder's step before running it. The runbook, per courier: issue a sign-in code (`courier_issue_signin_code`) and have the courier sign in on the courier host; see the Ghana Card in person, sight only (10.11); then run the check, then the read-back.
+
+### 10.4 (c) Once PiVerify works: `courier_apply_kyc_status` and `courier_bind_piverify_session`
+
+The starting state: `status = 'buffer'`, `buffer_since = operator_checked_at`, no bound session, `piverify_status` null.
+
+**The bind, on the first Start verification tap.** As written, it drops the courier to `registered` (10.1). P18 replaces the function, same signature, with one change to the UPDATE: when the row is operator-checked and in buffer through the check (`operator_checked_at is not null and status = 'buffer' and buffer_since = operator_checked_at`), `status` and `buffer_since` are left as they are, but only while the sunset deadline has not passed (`operator_check_deadline is null or now() < operator_check_deadline`). Past the deadline the bind resets the courier to `registered` as it does everyone, so a courier the ladder has already stopped gets the ordinary path whether or not the founder's hand pause (10.6) has landed yet: without that term, an unpaused courier past the deadline would keep `buffer_since = operator_checked_at` through `pending_review` (`:284-285`) and stay refused until `approved`, while a paused one would reset. Every other row behaves exactly as today, including the reset and the operator-pause rule. Its other guards are untouched: `already_full` (`courier_piverify_bind.sql:131-134`), `session_live` (`:141-147`), `bad_status` (`:155-158`).
+
+**Then each status through `courier_apply_kyc_status`** (`2026-10-08_piverify_resubmission.sql`, six-argument function). The ranks and the forward check, `:244-266`, then the ladder, `:269-278`:
+
+```
+  v_status := v_courier.status;
+  if coalesce(v_courier.paused_reason, '') <> 'operator' then
+    if p_status = 'pending_review' and v_courier.status = 'registered' then
+      v_status := 'buffer';
+    elsif p_status = 'approved' then
+      v_status := 'full';
+    elsif p_status in ('rejected', 'failed') then
+      v_status := 'paused';
+    end if;
+  end if;
+```
+
+and the clock, `:284-285`:
+
+```
+         buffer_since            = case when p_status = 'pending_review'
+                                        then coalesce(buffer_since, now()) else buffer_since end,
+```
+
+| PiVerify says | Status after | `buffer_since` | Why |
+| --- | --- | --- | --- |
+| `created` | buffer | unchanged | the bind already stored `created` (rank 0), so a repeat is `not_forward` (`:255`); no ladder branch matches |
+| `started` | buffer | unchanged | forward (1 > 0); no ladder branch matches |
+| `pending_review` | buffer | unchanged | the branch needs `status = 'registered'`, which a checked courier is not; `coalesce` keeps the check time. **No fresh clock**: correct under 10.5 option B, a finding under option A |
+| `approved` | full | unchanged | `:273-274`; `kyc_approved_at` set by `:286-287`; `paused_reason` nulled for full (`:295`) |
+| `rejected` | paused, reason `rejected` | unchanged | `:275-276`, `:293-294`. Out of buffer, as decision 1 intends: the check never outranks a PiVerify refusal |
+| `failed` | paused, reason `failed` | same as rejected | |
+
+Flags:
+
+1. **The bind reset**, above. Without the P18 change every operator-checked courier loses their jobs on the first tap. This is the one that matters.
+2. **A rejection with RESUBMIT or APPEAL keeps the courier paused through the resubmission.** The reopened session moves `started` and `pending_review` forward again (`:241-253`), but `pending_review` only lifts `registered`, never `paused`, so they stay paused until `approved`. That is today's behaviour for every legacy courier, not new; open question 9.
+3. **After a final rejection or failure, a new session puts them on the ordinary path.** The bind for that session sees `status = 'paused'`, not buffer, so it resets them to `registered` with `buffer_since` null as today. Their next `pending_review` gives a fresh `buffer_since` that is no longer equal to `operator_checked_at`, so the check stops counting for the ladder (10.5) while the record of it stays.
+4. **Nothing in either function resets an operator-checked courier to `registered` other than the bind**, and nothing else drops them out of buffer other than a rejection, a failure, approval to full, or a hand pause.
+
+### 10.5 (d) The 30-day window while PiVerify is down
+
+Reader section 10 lists `status = 'buffer'` couriers 30 or more days past `buffer_since` (`scripts/dispatch-reader.mjs:970-1004`), and `effectiveTier` refuses them on read (`lib/courier-ladder.ts:75`). Three ways to treat an operator-checked courier:
+
+- **A. No change.** The window applies from the check. On day 30 the ladder refuses them, section 10 lists them, and the founder pauses by hand. With PiVerify down they have no way back, so the check buys 30 days per courier, once. Simplest; makes decision 1 a one-month trial rather than an interim route.
+- **B. Exempt until the sunset (recommended).** A courier is exempt from the 30-day window while they are in buffer through the check, that is `operator_checked_at is not null and buffer_since = operator_checked_at`. Their bound is the sunset deadline instead (10.6): no bound while `operator_check_deadline` is null, refused on read at and after it. Section 10 leaves them out: its first arm (buffer 30 days or more) gains `and buffer_since is distinct from operator_checked_at`, written without parentheses for the reader's guard, and its second arm (buffer with no `buffer_since`) is left as it is, since a null clock is never a clock from the check and the ladder refuses it either way. Section 12 lists them. The equality test is what keeps flag 3 in 10.4 honest: a courier who came back through PiVerify after a rejection is on the ordinary 30-day clock again.
+- **C. Renewal by re-check.** The window applies, and the founder sees the courier in person again every 30 days and runs a renewal that moves `buffer_since`. Keeps one rule for everyone, but every renewal is a hand write that restarts a clock, and decision 2 then needs a record per visit.
+
+Recommendation: **B.** The 30-day window bounds a courier waiting on a PiVerify review that is under way. An operator-checked courier is not waiting on anything Gyema or the courier can move until PiVerify authenticates, and decision 3 already names the bound that applies to them.
+
+Code under B (build time): `LadderRow` gains `operator_checked_at` and `operator_check_deadline`, both optional so the Pioneer route, which reads `courier_find_pioneer`, passes neither. `effectiveTier` keeps every existing row of its table (`lib/courier-ladder.ts:47-58`) and adds one inside `buffer`: through the check, refused at or after the deadline, otherwise buffer. The courier accept route's `REGISTRY_COLUMNS` (`app/api/courier/jobs/accept/route.ts:56`) and `KYC_COLUMNS` (`lib/courier-kyc.ts:38`, which `/api/courier/me` reads) each gain the two columns. A missing or unparseable deadline fails closed only when the column is set; null means no sunset yet.
+
+### 10.6 (e) The sunset
+
+Tracked per row, in `operator_check_deadline` (10.2, decision 3), so the ladder, the courier page and the reader all read one stored fact.
+
+A second owner-only function in P18: `public.courier_start_operator_check_sunset()`, no argument, returning `table (couriers_given_a_deadline integer, deadline timestamptz)`. Same style and privileges as 10.3. It first takes the same advisory lock as `courier_record_operator_check`, then sets `operator_check_deadline = now() + interval '30 days'` (decision 1: 30 days from when it is run) on every eligible row: `operator_checked_at` set, `operator_check_deadline` null, `shredded_at` null and `status <> 'full'`. It returns the count and the deadline, and the founder reads the rows back. The 30 is written once, in the function; the ladder, the page and the reader read the stored deadline and never the number.
+
+Re-run: it touches only rows still without a deadline, and after the first run guard 6 of 10.3 stops any new check, so a second run normally sets nothing and returns 0. It never moves an existing deadline.
+
+One gap, from reading the sunset as started from the rows: run when no row is eligible (no checked courier left in buffer or paused), it marks nothing, so guard 6 still reads not started and new checks stay possible. The function therefore refuses to run with no eligible row, with 55000 `no_eligible_couriers`, so a run either marks the sunset or says it could not. If every checked courier is already full or shredded at that point, there is nothing to sunset. Further checks are then the founder's choice, not something the data refuses.
+
+Enforcement, three layers, none automatic in the sense of writing:
+
+1. **On read, at once:** from the deadline, `effectiveTier` refuses the courier (10.5 B), so accept answers 403 `courier_not_active` and the page stops offering jobs. The same pattern as decision 7.
+2. **Reader section 12** (10.8) flags every operator-checked courier past the deadline whose stored status still reads buffer.
+3. **The founder's hand pause** of each one listed: `status = 'paused'`, `paused_reason = 'pending_timeout'`, guarded on the courier id and on `status = 'buffer'`, with RETURNING and a read-back. `pending_timeout`, not `operator`, on purpose: `decideKycStart` refuses only an `operator` pause (`lib/courier-kyc.ts:96`), so the courier can still finish PiVerify, and approval lifts a `pending_timeout` pause (`2026-10-08_piverify_resubmission.sql:270,295`; probed in item 3, notes line 158). The statement is drafted with the migration, with the bracketed pre-flight CLAUDE.md asks for.
+
+**Runbook, per network, after PiVerify authenticates for Gyema's account:** on the same day, the founder sets `PIVERIFY_ENABLED=true` for Production in that network's Vercel project, redeploys, confirms the new Production deployment, and runs `courier_start_operator_check_sunset()` once, then the read-back. Same day, so the 30 days a courier has match the days PiVerify is open to them. After that, `npm run dispatch`, and the hand pause for each section 12 row past its deadline. There is no scheduler, as in decision 7.
+
+### 10.7 (f) Trust and wording
+
+**Anchoring and the trust bureau read `kyc_approved_at` only.** Neither is built yet: no code at `c8b5384` computes a trust record or an anchor leaf. The rule is already written where they will be built: `lib/courier-ladder.ts:15-18` ("FULL IS FULL FOR DISPATCH ONLY ... Anchoring and the trust bureau read kyc_approved_at only"), the `vouched_at` column comment (`2026-10-09_guest_jobs_courier_assignment.sql:172-173`), notes 6.10 (line 955), and the spec's launch record ("KYC approval event", `docs/anchoring-spec.md:54`), whose attestor byte `0x06` is PiVerify (`docs/anchoring-design-notes.md:177`). P18 adds the same sentence to the comments on `operator_checked_at` and on both new functions. The operator check is never an attestor, never a leaf, never a trust bureau event, and never a reason to show "verified".
+
+What the courier sees today, from `app/courier/courier-panel.tsx`, with an operator-checked courier: Account "Starter (limited jobs)" (`:51`), Verification "Not started" (`:286`), and a "Start verification" button (`:311`). None of these says verified, and "Verified courier" (`:52`) is reachable for a legacy courier only through `kyc_approved_at`. Strings that would change or be added, each **COPY DRAFT** for the gyema-accuracy review:
+
+**Superseded by 10.13.** The four drafts below are kept as designed, for the record. The approved wording is in 10.13; draft 3 changed, and drafts 1, 2 and 4 were approved as written.
+
+1. **New line under the status card, while in buffer through the check.** COPY DRAFT: "You have starter access after an in-person check by Gyema. This is not identity verification. Full access needs verification through PiVerify."
+2. **The lapsed line,** today "Your verification has taken longer than 30 days. Jobs are paused until it completes." (`courier-panel.tsx:329`, pinned in `tests/courier-view.test.ts:68`). For a courier stopped at the sunset deadline that is false. COPY DRAFT: "Starter access from the in-person check has ended. Jobs are paused until your verification through PiVerify is complete."
+3. **While PiVerify is not enabled,** the Start verification tap would end in "We could not start verification just now. Try again in a few minutes." (`:77`), which promises a few minutes. Decision 10: the button is hidden whenever `/api/courier/me` reports `piverifyEnabled: false`, for every signed-in courier, checked or not, and this line is shown in its place. COPY DRAFT: "Verification through PiVerify is not open yet. Gyema will tell you on WhatsApp when it is." (Superseded by 10.13.)
+4. **Once the sunset starts.** COPY DRAFT: "Complete your verification through PiVerify by {date} to keep taking jobs." The date only, in Accra time, no time of day.
+
+`GET /api/courier/me` gains three fields: `operatorChecked` (boolean: in buffer through the check, the 10.5 test), `operatorCheckDeadline` (the deadline or null) and `piverifyEnabled` (boolean, below). Never `operator_checked_by`, and never the word "verified" in a field name. The status labels pinned in `tests/approved-copy.test.ts:92-94` do not change.
+
+**PiVerify on or off (decision 10).** A new server-side environment variable, `PIVERIFY_ENABLED`:
+
+- **Values.** Set for Production only, per network. Unset by default on both networks, and Preview and Development leave it unset. It is on only when it reads exactly `true`; unset, empty, `false`, `TRUE`, ` true` or anything else is off, so it fails closed. It is never `NEXT_PUBLIC_`: it is read on the server at request time, from one helper beside the other PiVerify config in `lib/piverify.ts` (`getBaseUrl` and `getApiKey`, `:34-48`). It is not a secret, but a change still needs a redeploy, as for any Vercel env change.
+- **`GET /api/courier/me`** reports it as `piverifyEnabled`. `canStartKyc` also reads false while it is off, so the field keeps its contract: "whether POST /api/courier/kyc/start would act rather than refuse" (`app/api/courier/me/route.ts:29-35`). The page hides Start verification when `piverifyEnabled` is false and shows COPY DRAFT 3. While it is off the page does not poll `/api/courier/kyc/refresh` either.
+- **`POST /api/courier/kyc/start`** refuses while it is off with 503 and reason `piverify_not_enabled`. **`POST /api/courier/kyc/refresh`** refuses with the same reason. Both refuse before any PiVerify call and before any registry read, at a new step in their ORDER lists: after `resolveCourier` (a signed-out caller still gets 401) and before the rate limit (so a refusal spends no limiter call). In `kyc/start/route.ts` that is after `:119`; in `kyc/refresh/route.ts`, after `:85`. The reason is new, so it is never confused with `verification_unavailable`, which means PiVerify was asked and failed. The panel maps it to COPY DRAFT 3 if a cached page taps the button anyway.
+- **Not covered: `POST /api/kyc/webhook`.** It keeps its own gate, the signature over `PIVERIFY_WEBHOOK_SECRET`, which answers 500 `misconfigured` while the secret is unset (`app/api/kyc/webhook/route.ts:79-85`). It needs no second switch.
+
+### 10.8 (g) Reader, view and catalog
+
+**The view.** `courier_registry_dispatch` (P15) should carry `operator_checked_at` and `operator_check_deadline`: two times, no person. Not `operator_checked_by`: the reader has no use for it, and the view's rule is that it carries only what the reader lists. P18 replaces the view with columns 1 to 9 unchanged and the two appended as 10 and 11, restating `security_invoker = false` and repeating P15's revoke and grant (`2026-10-10_courier_registry_dispatch_view.sql:132-133`), since the view is automatically updatable. P15's own verification cell then reads false on "exactly 9 columns", as P2's does after P9; check 9 is the live truth. P15 is applied on Testnet, so this has to be a new file, not an edit of P15.
+
+**The reader** (`scripts/dispatch-reader.mjs`):
+
+- `REQUIRED_COLUMNS.courier_registry_dispatch` gains the two columns, with `COLUMN_SOURCES` naming P18, so the reader refuses to run until P18 is in.
+- Section 10's where clause, as in 10.5 B.
+- A new section 12, "OPERATOR-CHECKED COURIERS", appended so no section is renumbered (the reader's own rule, `:1067-1071`). From the view: operator-checked, not shredded, not `full`. One row per `courier_ref`, with `status`, `operator_checked_at`, `operator_check_deadline`, `buffer_since`, `piverify_status` and `paused_reason`. Flags: no deadline yet (sunset not started); past the deadline with status still buffer (due a hand pause, `pending_timeout`); in buffer through PiVerify rather than the check; and an alarm, expected empty, for a checked courier with no deadline while another row has one, which the shared advisory lock (10.3, 10.6) should make impossible.
+- The dry run's statement count, 19, becomes 20 (`:1662-1664`).
+- Unrelated, found while reading: `DECLARED_GUEST_STATUSES` (`:184-191`) lacks `pending_quote`, which `lib/guest-jobs.ts:7-14` now carries. Recorded here; a separate fix.
+
+**Catalog checks** (`docs/catalog-checks.sql`):
+
+- **Check 9:** new `2026-10-12 operator check` rows: each of the three columns with its type; each of the four constraints, validated; both functions present, security definer, `search_path` pinned; service_role cannot execute either, from both `has_function_privilege` and the ACL, as the P11 and P13 rows do; the bind function's body carries the keep-buffer clause; the view's columns 10 and 11. The existing P15 row "courier_registry_dispatch column 9 is piverify_allowed_action, the last of 9 columns" is amended to drop "the last of 9", or it reads false after P18.
+- **Check 7:** both new function names added to its list.
+- **Check 14:** the expectation text gains the P18 step: twenty columns, nineteen constraints. `timing_rule_breaks` gains two counts: `operator_checked_buffer_past_deadline` (status buffer through the check and past the deadline: information, a hand pause due) and `operator_checked_not_legacy` (can only read zero after P18).
+- **Check 12:** unchanged, still exactly one row, since both functions are owner only.
+- **Check 11 and check 3:** the view's column count, and gyema_reader SELECT alone, unchanged in form.
+
+### 10.9 (h) Tests and Docker probes, at build time
+
+Vitest, with no database:
+
+- Migration text pins, in the style of `tests/piverify-webhook-guards.test.ts`:
+  - the guard order of 10.3: the advisory lock, the row lock, then guards 1 to 11, then the one UPDATE;
+  - the UPDATE writes exactly the five columns;
+  - the re-run branch sits before `sunset_started` and before the status guard;
+  - `never_signed_in` reads `courier_sessions` by `courier_id` and takes no lock on it;
+  - both functions take the same advisory lock key, each as its first statement;
+  - the sunset function has no parameter, and its deadline is `now() + interval '30 days'`, the only place the 30 is written;
+  - `no_eligible_couriers` is raised before any UPDATE;
+  - the revoke from all four roles and no grant, for both functions;
+  - the bind's keep-buffer clause, and that the bind's other branches are byte-for-byte as P12.
+- `PIVERIFY_ENABLED`:
+  - the helper is true only for exactly `true`, and false for unset, empty, `false`, `TRUE`, `1`, `yes` and ` true`;
+  - no file under `app/` or `components/` reads it except through the helper, and no `NEXT_PUBLIC_PIVERIFY_ENABLED` exists anywhere.
+- `/api/courier/kyc/start` and `/api/courier/kyc/refresh`, with it off:
+  - 503 `piverify_not_enabled`;
+  - no PiVerify fetch is made, no registry read, no limiter call, no RPC;
+  - a signed-out caller still gets 401 and an off-surface request still gets 404, before the switch is read.
+  - With it on, every existing route test passes unchanged.
+- `/api/courier/me`: `piverifyEnabled` reported both ways; `canStartKyc` false whenever it is off, for every row `decideKycStart` would answer `continue` or `create`.
+- The panel, with `piverifyEnabled` false: no Start verification or Continue verification button, COPY DRAFT 3 shown, and no refresh poll started. The reason `piverify_not_enabled` maps to COPY DRAFT 3.
+- `effectiveTier`: every existing row of its table unchanged; through the check with no deadline is buffer on day 31, day 365; at and after the deadline is none; `buffer_since` not equal to `operator_checked_at` falls back to the 30-day rule; an unparseable deadline fails closed; the Pioneer route's row without the fields behaves as today.
+- `/api/courier/me` and `/api/courier/jobs/accept`: the new columns are read, `operator_checked_by` is never selected or returned, and the two new fields.
+- The panel: the COPY DRAFT lines once approved, and that no rendered string on the courier page contains "verified" for a courier who is not `full`.
+- The reader: section 12's statement passes `assertReadOnlySql`; section 10's new clause; the dry run counts 20.
+
+Docker, on a throwaway `postgres:17-alpine` with the item 6 fixture's roles (anon, authenticated, service_role, gyema_reader), over the real P2, P9, P11, P12, P13, P15, P17 and then P18. Positive:
+
+- A registered legacy courier who has redeemed a code is checked: status buffer, the two times equal, `checked`, and the read-back agrees. A revoked or expired session still counts for guard 11.
+- A re-run returns `already_checked` and changes nothing, `updated_at` included.
+- The bind keeps a checked courier in buffer before the deadline, resets a checked courier past the deadline to `registered` (paused by hand or not), and still resets an unchecked one exactly as before.
+- `courier_apply_kyc_status` through `created`, `started`, `pending_review`, `approved`, `rejected` and `failed`, each from the checked state, matches the 10.4 table; a rejected-then-rebound courier lands at `registered` with a `buffer_since` that no longer equals the check.
+- The sunset function, called with no argument, sets every eligible row's deadline to the same value, 30 days after its `now()`. A re-run sets none and returns 0, and moves no deadline. `full` and shredded rows get none.
+- A re-run of the check on a courier checked before the sunset still returns `already_checked` after it.
+- Two sessions, one running the check and one the sunset, with the check held open: the sunset waits on the advisory lock. After both commit, the newly checked courier either has a deadline or was refused `sunset_started`, never neither.
+- gyema_reader reads columns 10 and 11 and cannot read `operator_checked_by`; the reader's section 12 statement, run as gyema_reader, lists the right rows.
+
+Negative, each with the SQLSTATE expected:
+
+- Pioneer refused (`not_legacy`, 55000).
+- Buffer refused, full refused, paused refused (`not_registered`, 55000), for unchecked couriers.
+- Registered with an operator pause refused (`paused`).
+- Shredded refused; unknown id refused (P0002).
+- `p_checked_by` null, empty, `Founder` or a name refused (22023).
+- A courier whose current session is rejected or failed refused.
+- service_role cannot execute either function (42501); neither can anon or authenticated.
+- A hand UPDATE setting `operator_checked_at` on a Pioneer (23514), a time without a who (23514), a deadline without a check (23514), `operator_checked_by = 'someone'` (23514).
+- After the sunset has started, a check on any new registered legacy courier refused (`sunset_started`, 55000), and nothing written.
+- A registered legacy courier with no `courier_sessions` row (a code issued but never redeemed, or never issued) refused (`never_signed_in`, 55000).
+- The sunset function with no eligible row refused (`no_eligible_couriers`, 55000), nothing written, and guard 6 still reads not started.
+- `courier_start_operator_check_sunset(30)`, or any argument, fails: there is no such signature (42883).
+- P18 run without P17 or P15 stops at its guard and writes nothing; P18 run twice reads `all_present` true both times.
+
+### 10.10 (i) Deploy order
+
+**P18:** `db/migrations/2026-10-12_courier_operator_check.sql`. One file: the columns, the four checks, both functions with their revokes, the bind replaced, the view replaced, and an `all_present` verification as the last statement. Its row in `docs/deploy-order.md`, drafted:
+
+> | P18 | Operator-checked buffer | `db/migrations/2026-10-12_courier_operator_check.sql` | Phase 1 item 10 (founder decisions 12 Oct 2026). Needs P2, P9, P12, P13, P15 and P17; the guard stops the file if any is missing. Adds `courier_registry.operator_checked_at`, `operator_checked_by` and `operator_check_deadline` with four named checks, `courier_record_operator_check(uuid, text)` and `courier_start_operator_check_sunset()` (owner only, executable by no role, service_role included; the sunset sets a 30-day deadline and takes no argument), replaces `courier_bind_piverify_session` so a checked courier keeps buffer on the first bind, and appends columns 10 and 11 to `courier_registry_dispatch`. Writes no row. Apply BEFORE the item 10 code deploys: the accept route and `/api/courier/me` name the new columns, so until they exist every courier accept and every courier page load answers 503. Last statement is its verification: `all_present` true. Then the catalog check: the `2026-10-12 operator check` rows in check 9 true, check 7 showing both functions with the owner alone, check 12 still exactly one row, check 14 at twenty columns and nineteen constraints. P15's own cell now reads false on its column count. **Never re-run P12 after P18:** it restores the bind that resets a checked courier to registered (re-running P18 fixes it); the P12 row gains the same sentence, as P5's row carries one for P9. Then the item 10 code, then the reader. `PIVERIFY_ENABLED` stays unset when the code deploys, so Start verification stays hidden and the two KYC routes refuse; it is set to `true` only on the day PiVerify authenticates, with a redeploy, and `courier_start_operator_check_sunset()` is run the same day (10.6). Testnet first; Mainnet only once P2 to P17 are in there, and on a go-ahead. |
+
+Order per network: (1) P18 and its catalog check. (2) The item 10 code deploy, and the merge gate (main fast-forwards and a new Production deployment). (3) The reader from the item 10 commit. (4) The first checks, by hand, one courier at a time, each after the courier has signed in once, each with a read-back. `PIVERIFY_ENABLED` is left unset throughout. (5) Later, once PiVerify authenticates: the same-day runbook in 10.6. The reverse order breaks the courier host: code before P18 is a 42703 on every registry read.
+
+**Testnet:** every prerequisite is applied: P2 and P9 (`docs/deploy-order.md:32-36`), P12 (notes line 978), P13 (notes line 1045), P15 (founder, 12 Oct 2026) and P17 (`docs/deploy-order.md:39-41`). P18 can follow once approved.
+
+**Mainnet:** nothing from Phase 1 is applied (`docs/deploy-order.md:36`, and the P17 row at `:65`), so P18 queues behind P2 to P17 there, on its own go-ahead.
+
+**Mainnet hand-apply list,** from the scan `pinet\.com|Testnet|testnet|8841|3681` run on the files item 10 would touch:
+
+- Hits, so hand-applied onto Mainnet's own version: `scripts/dispatch-reader.mjs` (4 hits, all comments or messages; its own header says it stays byte identical, so expect the hand-applied result to match by hash), `docs/catalog-checks.sql` (5), `docs/deploy-order.md` and `docs/anchoring-phase1-notes.md`.
+- No hit, so byte-identical with the blob-hash gate: `lib/courier-ladder.ts`, `lib/courier-kyc.ts`, `app/api/courier/me/route.ts`, `app/api/courier/jobs/accept/route.ts`, `app/courier/courier-panel.tsx`, `app/courier/courier-view.ts`, `lib/piverify.ts`, `app/api/courier/kyc/start/route.ts`, `app/api/courier/kyc/refresh/route.ts` (0 hits each) and the P18 file itself, which must be scanned again once written.
+- Not touched: `components/listing-detail-sheet.tsx`, `app/layout.tsx`, `app/send/page.tsx`, `public/privacy.html`, CLAUDE.md.
+
+### 10.11 (j) Data protection (Data Protection Act 2012, Act 843)
+
+Not legal advice; the spec already flags registration with the Data Protection Commission for counsel to confirm (`docs/anchoring-spec.md:56`).
+
+**Stored:** when the check happened (one timestamp), who did it (a role label from a closed list, today `founder`), and later a deadline. On a row whose only other identifier is a random id and a salt (`2026-10-08_courier_registry.sql:41-45`). None of the three names the courier, and none says anything about their card.
+
+**Not stored, anywhere in Gyema's systems:** the Ghana Card number, a photo or scan of the card, the name or date of birth on it, its expiry, its serial, a description of it, whether the face matched, or any note about the document. The check's purpose is limited to admitting the courier to buffer, and the record is limited to the fact that it happened.
+
+**Sight only (founder, 12 Oct 2026):** the founder does not photograph, copy or forward the courier's ID by any means; the check is sight only.
+
+**What the founder must not record anywhere,** in or out of the app:
+
+- The card number or a photo of the card, in WhatsApp, in phone notes or the camera roll, in a spreadsheet, in this repository, in a GitHub issue or commit, or in these notes.
+- Anything about the card in the Supabase SQL editor: query text is kept in its history and saved snippets, so the function is called with the courier id and `founder` and nothing else, never with a comment naming the person.
+- The pairing of a courier reference with the person's name in any shared place. The 5.1 note (courier reference beside the WhatsApp contact) stays on the founder's phone, as item 5 already has it.
+
+**The courier is told** what is kept: that Gyema records the date of the in-person check, and nothing from the card. That sentence belongs in the courier-facing privacy text at build time, as a COPY DRAFT. `public/privacy.html` is network-specific and would be hand-applied.
+
+**Shredding.** `courier_shred` (item 9) is not built. The three columns identify no one, so keeping them on a shredded row keeps history's shape without linking it to anyone; open question 8.
+
+### 10.12 (k) Open questions for the founder
+
+1. **The sunset length,** in days (decision 3). The function accepts 1 to 90.
+2. **The 30-day window:** A, B or C (10.5). B is recommended.
+3. **Sunset tracking:** a per-row `operator_check_deadline` set by one function (recommended, 10.6), or a single date in code, which needs a deploy to start and cannot be read by the reader without a new parser.
+4. **One file or two:** P18 as one file (recommended), or the view replacement split into its own P18b.
+5. **A PiVerify refusal:** should a courier whose current session is `rejected` or `failed` be refused a check (guard 9, recommended), and should an earlier refused session count too? None exists today, since PiVerify has never authenticated.
+6. **Checks after the sunset starts:** refuse new checks once any deadline is set, or give a new check the deadline at once.
+7. **Who:** `founder` as the only `operator_checked_by` value. Any second person is a migration.
+8. **Shredding:** keep the three columns on a shredded row (recommended, they identify no one), or null them in `courier_shred`.
+9. **Resubmission:** an operator-checked courier rejected with RESUBMIT or APPEAL stays paused until approval (10.4 flag 2), as every legacy courier does today. Keep, or let a resubmission in progress restore buffer.
+10. **The Start verification button while PiVerify is down:** hide it for a courier in buffer through the check and show COPY DRAFT 3 (recommended), or keep the button and its error.
+11. **Signed in first:** should the check require the courier to have redeemed a sign-in code at least once (a row in `courier_sessions`), so the founder knows the code reached the person they met?
+12. **Undo:** no function to undo a check (recommended); a mistaken check is answered with a hand pause, `paused_reason = 'operator'`. Or a revoke function.
+13. **The COPY DRAFTs** in 10.7 and 10.11, for the gyema-accuracy review.
+
+**Founder decisions on Item 10, 12 October 2026,** one per question above:
+
+1. Sunset length: 30 days from when courier_start_operator_check_sunset is run.
+2. 30-day window: option B.
+3. Sunset tracking: per-row operator_check_deadline set by the owner-only function.
+4. One file: P18.
+5. Refuse a check when the courier's current PiVerify session is rejected or failed.
+6. Refuse new checks once the sunset has started.
+7. founder is the only allowed operator_checked_by value.
+8. courier_shred keeps the three fields.
+9. Resubmission: keep today's rule (rejected stays out of buffer until approved).
+10. Hide Start verification while PiVerify is unavailable (COPY DRAFT 3).
+11. The check requires the courier to have redeemed a sign-in code at least once.
+12. No undo function; a mistaken check is answered by a hand pause with paused_reason = 'operator'.
+13. Copy review at build time with the gyema-accuracy checklist.
+
+### 10.13 Copy approved, 12 October 2026
+
+The founder approved the item 10 copy on 12 October 2026, after the gyema-accuracy review (decision 13). These strings supersede the COPY DRAFTs in 10.7. Each is marked "Copy approved 12 Oct 2026 (item 10)." where it is defined, and no COPY DRAFT marker is left in the code.
+
+1. **Under the status card, while in buffer through the check** (`OPERATOR_CHECK_LINE`, `app/courier/courier-view.ts`): "You have starter access after an in-person check by Gyema. This is not identity verification. Full access needs verification through PiVerify." As drafted.
+2. **The lapsed line for a courier stopped at the sunset deadline** (`OPERATOR_CHECK_ENDED_LINE`): "Starter access from the in-person check has ended. Jobs are paused until your verification through PiVerify is complete." As drafted.
+3. **In place of the verification button while PiVerify is not enabled** (`PIVERIFY_NOT_OPEN_LINE`): "Verification through PiVerify is not open yet. Gyema will let you know when it opens." Changed from draft 3, whose second sentence read "Gyema will tell you on WhatsApp when it is."
+4. **Once the sunset starts** (`OPERATOR_CHECK_DEADLINE_TEMPLATE`): "Complete your verification through PiVerify by {date} to keep taking jobs." As drafted. `{date}` is the deadline, the date only, in Accra time, no time of day.
+5. **The welcome sheet's Stay safe line** (`components/welcome-sheet.tsx`): "Gyema connects users. Payments and coordination happen on Pi Chat or WhatsApp."
+
+**Removed from the Stay safe line:** "Verify identity via Pi KYC before sending valuables." **Why:** it told users that a Pi sign-in stands for a KYC check, and that is not established. `/v2/me` returns no KYC status, and sign-in as proof of KYC is an unverified assumption (`docs/anchoring-spec.md:64`, gate 4). Couriers are verified through PiVerify, so no visible string may point users to Pi KYC instead. The dash after "connects users" was also replaced by a full stop, under the no em-dash rule.
+
+**Pins.** `tests/operator-check.test.ts` holds the four item 10 strings exactly. `tests/approved-copy.test.ts` holds the Stay safe line, fails on any COPY DRAFT marker left under `app/`, `components/`, `lib/`, `scripts/` or `middleware.ts`, and fails if "via Pi KYC" appears in any user-facing string.
+
+**Not covered by this approval:** the courier-facing privacy sentence in 10.11 (the date of the in-person check is kept, nothing from the card). It is not built, and `public/privacy.html` is unchanged.

@@ -9,7 +9,8 @@
 //
 // WHAT THIS IS
 //
-// The eyes of the guest delivery operator runbook. It reads Testnet and
+// The eyes of the guest delivery operator runbook. It reads the project its
+// connection string names, which GYEMA_READER_EXPECTED_REF must confirm, and
 // prints what each stage of the queue currently holds, in runbook stage
 // order, so the operator can see the whole board without clicking through
 // nine dashboard queries. It is never the hands.
@@ -44,9 +45,13 @@
 //
 // CREDENTIALS
 //
-// No secret lives in this repo. The connection string is read from the
-// environment variable GYEMA_READER_DATABASE_URL, which belongs in a
-// gitignored .env.local or in the shell, and which authenticates as
+// No secret lives in this repo. Every variable this script reads comes from
+// the shell environment it is started in: nothing loads .env.local or any
+// other file (there is no dotenv, and npm run does not load one). Set them in
+// the shell first, for example $env:NAME = "..." in PowerShell.
+//
+// The connection string is read from GYEMA_READER_DATABASE_URL, and
+// authenticates as
 // gyema_reader: SELECT on public.guest_jobs_dispatch,
 // public.listings_dispatch and public.courier_registry_dispatch, and nothing
 // else. Not on the base tables, so delivery_code_hash, the raw phone columns
@@ -72,6 +77,19 @@
 // GYEMA_READER_CA_CERT is also required, and is the path to the project CA
 // certificate. The connection is refused without it: see the TLS block in
 // main(). The CA is per project and the two networks do not share one.
+//
+// The connection string must carry no ssl or sslmode parameter (nor any other
+// ssl* parameter, nor uselibpqcompat). node-postgres lets those override the
+// verified TLS settings below, and sslmode=disable or no-verify would switch
+// verification off. The script refuses to start on one, naming it, without
+// printing the string.
+//
+// GYEMA_READER_EXPECTED_REF is also required: the Supabase project ref the
+// founder means to read. The script takes the ref from the connection
+// string's user name, gyema_reader.<ref>, refuses to start unless the two
+// match exactly, and prints the ref in the report header. The host line
+// alone cannot tell the networks apart: on the Session pooler both projects
+// can share one regional host.
 //
 // Take the Session pooler URI from the Supabase dashboard under Connect (the
 // direct db.<ref>.supabase.co host is IPv6 only on current projects), then
@@ -170,25 +188,48 @@ const POSTED_STALE_HOURS = 24
 // where clause and the heading cannot disagree.
 const SIGHTING_WINDOW_HOURS = 48
 
-// The guest job statuses the application declares, mirrored by hand from the
-// GuestJobStatus union at lib/guest-jobs.ts:7-13.
-//
-// It has to be a mirror. The union is a TypeScript type, erased at compile
-// time, so it has no runtime form to import; and lib/guest-jobs.ts is
-// TypeScript that imports fetch based client code, so a plain .mjs cannot
-// load it at all. This list and that union move together: change one, change
-// the other.
+// The guest job statuses the application declares: the GuestJobStatus union
+// in lib/guest-jobs.ts, read from that file as text at load, as the shared
+// figures above are, so the two cannot drift. (A hand mirror here once lacked
+// pending_quote after the union gained it, and check 0.2 reported every
+// pending_quote row as undeclared.) The union is a TypeScript type, erased at
+// compile time, and that file imports client code, so it is read, not
+// imported. The script refuses to start unless the file holds exactly one
+// "export type GuestJobStatus =" followed by "| "value"" lines.
 //
 // Section 0.2 compares the table against this list. A finding there means the
 // declared type and the table disagree, and either side can be the wrong one.
-const DECLARED_GUEST_STATUSES = [
-  "posted",
-  "accepted",
-  "in_transit",
-  "delivered",
-  "cancelled",
-  "expired",
-]
+function parseStatusUnion(source, file) {
+  const lines = source.split(/\r?\n/)
+  const starts = []
+  lines.forEach((line, i) => {
+    if (/^export type GuestJobStatus =\s*$/.test(line)) starts.push(i)
+  })
+  const refuse = (why) =>
+    new Error(`[dispatch-reader] refused to start: ${why} in ${file}. The report reads the GuestJobStatus union from that file and keeps no copy of its own.`)
+  if (starts.length !== 1) throw refuse(`expected exactly one "export type GuestJobStatus =" line, found ${starts.length}`)
+  const values = []
+  for (let i = starts[0] + 1; i < lines.length; i++) {
+    const m = lines[i].match(/^\s*\|\s*"([a-z_]+)"\s*$/)
+    if (!m) break
+    values.push(m[1])
+  }
+  if (values.length === 0) throw refuse('no | "value" lines follow "export type GuestJobStatus ="')
+  if (new Set(values).size !== values.length) throw refuse("a status appears twice in GuestJobStatus")
+  return values
+}
+
+function loadStatusUnion(file) {
+  let source
+  try {
+    source = readFileSync(new URL(file, REPO_ROOT), "utf8")
+  } catch (err) {
+    throw new Error(`[dispatch-reader] refused to start: could not read ${file} for GuestJobStatus: ${err.message}`)
+  }
+  return parseStatusUnion(source, file)
+}
+
+const DECLARED_GUEST_STATUSES = loadStatusUnion("lib/guest-jobs.ts")
 
 // The date the one time delivery code shipped, commit d85aef6. Section 0.3
 // prints a created_at comparison against it as a fact and not as a verdict: a
@@ -288,7 +329,9 @@ const REQUIRED_COLUMNS = {
     "archived_at",
   ],
   // P15, db/migrations/2026-10-10_courier_registry_dispatch_view.sql, all
-  // nine of its columns. There is no other courier column to read.
+  // nine of its columns, then P18's two,
+  // db/migrations/2026-10-12_courier_operator_check.sql. There is no other
+  // courier column to read: operator_checked_by is never in the view.
   courier_registry_dispatch: [
     "courier_ref",
     "class",
@@ -299,12 +342,20 @@ const REQUIRED_COLUMNS = {
     "paused_reason",
     "shredded_at",
     "piverify_allowed_action",
+    "operator_checked_at",
+    "operator_check_deadline",
   ],
 }
 
 // Which migration adds each column a preflight can find missing, so the
 // failure names the file to apply rather than leaving it to be worked out.
 const COLUMN_SOURCES = [
+  {
+    test: (name) =>
+      name === "courier_registry_dispatch.operator_checked_at" ||
+      name === "courier_registry_dispatch.operator_check_deadline",
+    file: "db/migrations/2026-10-12_courier_operator_check.sql (P18)",
+  },
   {
     test: (name) =>
       name === "guest_jobs_dispatch.assigned_courier_id" || name === "guest_jobs_dispatch.declared_value_cedis",
@@ -576,7 +627,7 @@ const SECTIONS = [
     id: 3,
     title: "POSTED, NOT YET ACCEPTED",
     subtitle:
-      "phone_verified is shown per row, not filtered on: app/api/guest/create/route.ts writes status posted with phone_verified false on the same insert, so unverified posted rows exist.",
+      "phone_verified is shown per row, not filtered on: app/api/guest/create/route.ts writes every new job with phone_verified false, a job with both areas on the list as status posted and an off-list one as pending_quote (section 1), so unverified posted rows exist.",
     table: "public.guest_jobs_dispatch",
     where: "status = 'posted'",
     order: "created_at asc",
@@ -970,10 +1021,10 @@ const SECTIONS = [
   {
     id: 10,
     title: `BUFFER COURIERS DUE A HAND PAUSE, ${BUFFER_WINDOW_DAYS} days or more`,
-    subtitle: `status buffer with buffer_since ${BUFFER_WINDOW_DAYS} days or more ago, and buffer with no buffer_since at all. effectiveTier in lib/courier-ladder.ts already refuses both every job, computed on read; the stored status is set by hand (decision 7), so these rows are where it still reads buffer. A null buffer_since is refused closed by the ladder and also reported by catalog check 14.`,
+    subtitle: `status buffer with buffer_since ${BUFFER_WINDOW_DAYS} days or more ago, and buffer with no buffer_since at all. effectiveTier in lib/courier-ladder.ts already refuses both every job, computed on read; the stored status is set by hand (decision 7), so these rows are where it still reads buffer. A null buffer_since is refused closed by the ladder and also reported by catalog check 14. A courier in buffer through the operator check (buffer_since equal to operator_checked_at) is not on the ${BUFFER_WINDOW_DAYS}-day rule and is listed in section 12 instead (item 10, option B).`,
     table: "public.courier_registry_dispatch",
     key: "courier_ref",
-    where: `status = 'buffer' and shredded_at is null and buffer_since <= now() - interval '${BUFFER_WINDOW_DAYS} days' or status = 'buffer' and shredded_at is null and buffer_since is null`,
+    where: `status = 'buffer' and shredded_at is null and buffer_since <= now() - interval '${BUFFER_WINDOW_DAYS} days' and buffer_since is distinct from operator_checked_at or status = 'buffer' and shredded_at is null and buffer_since is null`,
     order: "buffer_since asc, courier_ref asc",
     columns: [
       "courier_ref",
@@ -1040,6 +1091,84 @@ const SECTIONS = [
       "  buckets, counted from the rows above:",
       `    unsettled, ${UNSETTLED_PIVERIFY_STATUSES.join(" or ")}, or rejected with an allowed action: ${rows.length} row(s)`,
     ],
+  },
+
+  // Section 12 (item 10, docs/anchoring-phase1-notes.md 10.8): every courier
+  // the founder checked in person who is not yet full. The check is not
+  // verification; this section exists to watch the sunset, and the founder
+  // pauses by hand (decision 7).
+  {
+    id: 12,
+    title: "OPERATOR-CHECKED COURIERS",
+    subtitle:
+      "Couriers the founder checked in person, not shredded and not yet full. The check moves a legacy courier to buffer only and is never identity verification: full needs PiVerify approval. Option B: a courier in buffer through the check is off the 30-day rule and bounded by operator_check_deadline instead, which courier_start_operator_check_sunset sets. At or past it the ladder refuses the courier on read; set status paused by hand with paused_reason pending_timeout, so they can still finish PiVerify. The alarm, expected empty, is a checked courier with no deadline while another listed courier has one, which the shared advisory lock in P18 should make impossible.",
+    table: "public.courier_registry_dispatch",
+    key: "courier_ref",
+    where: "operator_checked_at is not null and shredded_at is null and status <> 'full'",
+    order: "operator_checked_at asc, courier_ref asc",
+    columns: [
+      "courier_ref",
+      "class",
+      "status",
+      tstamp("operator_checked_at"),
+      ageOf("operator_checked_at"),
+      tstamp("operator_check_deadline"),
+      tstamp("buffer_since"),
+      "piverify_status",
+      "paused_reason",
+      // Computed by Postgres, so the comparison is exact to the microsecond
+      // and to the server clock. No parentheses, for the read only guard. A
+      // null compares to null, read below as no evidence, never as true.
+      "buffer_since = operator_checked_at as through_check",
+      "operator_check_deadline <= now() as past_deadline",
+    ],
+    render: (r, ctx) => {
+      const flags = []
+      const hasDeadline = r.operator_check_deadline_txt !== null && r.operator_check_deadline_txt !== undefined
+      const anyDeadline = (ctx?.rows ?? []).some(
+        (x) => x.operator_check_deadline_txt !== null && x.operator_check_deadline_txt !== undefined
+      )
+      if (!hasDeadline && anyDeadline) {
+        flags.push(
+          "ALARM: no deadline while another checked courier has one. The sunset should have marked this courier, or refused this check. Review before any action."
+        )
+      } else if (!hasDeadline) {
+        flags.push("no deadline yet: the sunset has not started")
+      }
+      if (r.status === "buffer" && r.through_check === true && r.past_deadline === true) {
+        flags.push(
+          "past the sunset deadline with status still buffer: the ladder refuses this courier every job; due a hand pause, paused_reason pending_timeout"
+        )
+      }
+      if (r.status === "buffer" && r.through_check !== true) {
+        flags.push(`in buffer through PiVerify, not the check: on the ${BUFFER_WINDOW_DAYS}-day rule, section 10`)
+      }
+      return {
+        flags,
+        age: r.operator_checked_at_age_secs,
+        ageLabel: "since operator_checked_at",
+        fields: [
+          ["class", show(r.class)],
+          ["status", show(r.status)],
+          ["operator_checked_at", show(r.operator_checked_at_txt)],
+          ["operator_check_deadline", show(r.operator_check_deadline_txt)],
+          ["buffer_since", show(r.buffer_since_txt)],
+          ["piverify_status", show(r.piverify_status)],
+          ["paused_reason", show(r.paused_reason)],
+        ],
+      }
+    },
+    footer: (rows) => {
+      const withDeadline = rows.filter((x) => x.operator_check_deadline_txt !== null && x.operator_check_deadline_txt !== undefined)
+      const due = rows.filter((x) => x.status === "buffer" && x.through_check === true && x.past_deadline === true)
+      const alarm = withDeadline.length > 0 ? rows.length - withDeadline.length : 0
+      return [
+        "  buckets, counted from the rows above:",
+        `    with a sunset deadline: ${withDeadline.length} row(s)`,
+        `    past the deadline, still buffer, due a hand pause: ${due.length} row(s)`,
+        `    ALARM, no deadline while another has one: ${alarm} row(s)`,
+      ]
+    },
   },
 ]
 
@@ -1115,7 +1244,7 @@ const CHECKS = [
     id: "0.2",
     title: "STATUS VOCABULARY",
     subtitle:
-      "Rows whose status is not among the values declared by the GuestJobStatus union at lib/guest-jobs.ts:7-13, mirrored in this file as DECLARED_GUEST_STATUSES. A finding means the declared type and the table disagree, and either side can be the wrong one. Known case: app/api/guest/create/route.ts:126 writes pending_quote, which the union does not carry, so pending_quote rows appear here until one side changes. The null arm is deliberate, not defensive: status not in (...) evaluates to null for a null status and would drop exactly the row most worth seeing.",
+      "Rows whose status is not among the values declared by the GuestJobStatus union in lib/guest-jobs.ts, read from that file at load as DECLARED_GUEST_STATUSES, so the list cannot drift from the type. A finding means the declared type and the table disagree, and either side can be the wrong one. The null arm is deliberate, not defensive: status not in (...) evaluates to null for a null status and would drop exactly the row most worth seeing.",
     table: "public.guest_jobs_dispatch",
     where: `status is null or status not in (${DECLARED_GUEST_STATUSES.map((s) => `'${s}'`).join(", ")})`,
     order: "status, created_at asc",
@@ -1133,7 +1262,7 @@ const CHECKS = [
       flags: [
         r.status === null || r.status === undefined
           ? "status is null. The declared GuestJobStatus union carries no null, so the type and the table disagree."
-          : `status "${r.status}" is not in the declared GuestJobStatus union (lib/guest-jobs.ts:7-13). The type and the table disagree.`,
+          : `status "${r.status}" is not in the declared GuestJobStatus union (lib/guest-jobs.ts). The type and the table disagree.`,
       ],
       age: r.created_at_age_secs,
       fields: [
@@ -1428,6 +1557,55 @@ function describeTarget(rawUrl) {
   }
 }
 
+// The query parameters that would override the verified TLS settings, by name,
+// lower case: ssl, sslmode and every other ssl* parameter node-postgres reads,
+// and uselibpqcompat, which changes what sslmode means. Null when the string
+// does not parse as a URL. The values are never returned.
+function sslParametersIn(rawUrl) {
+  let u
+  try {
+    u = new URL(rawUrl)
+  } catch {
+    return null
+  }
+  const names = []
+  for (const key of u.searchParams.keys()) {
+    const k = key.toLowerCase()
+    if ((k.startsWith("ssl") || k === "uselibpqcompat") && !names.includes(k)) names.push(k)
+  }
+  return names
+}
+
+// The project ref in the user name, gyema_reader.<ref>, or null. A Supabase
+// ref is lower case letters and digits.
+function projectRefFromUrl(rawUrl) {
+  try {
+    const user = decodeURIComponent(new URL(rawUrl).username || "")
+    const m = user.match(/^gyema_reader\.([a-z0-9]+)$/)
+    return m ? m[1] : null
+  } catch {
+    return null
+  }
+}
+
+// Whether the URL names the project GYEMA_READER_EXPECTED_REF expects. Exact
+// match, no trimming and no case folding, so a typo refuses rather than
+// passing.
+function checkExpectedRef(rawUrl, expected) {
+  if (!expected) return { ok: false, reason: "GYEMA_READER_EXPECTED_REF is not set." }
+  if (!/^[a-z0-9]+$/.test(expected)) {
+    return { ok: false, reason: "GYEMA_READER_EXPECTED_REF is not a project ref (lower case letters and digits only)." }
+  }
+  const ref = projectRefFromUrl(rawUrl)
+  if (ref === null) {
+    return { ok: false, reason: "the connection string's user is not gyema_reader.<project_ref>, so its project cannot be confirmed." }
+  }
+  if (ref !== expected) {
+    return { ok: false, reason: `the connection string names project ${ref}, and GYEMA_READER_EXPECTED_REF says ${expected}.` }
+  }
+  return { ok: true, ref }
+}
+
 // ---------------------------------------------------------------------------
 // Preflight
 // ---------------------------------------------------------------------------
@@ -1659,9 +1837,9 @@ async function runIntegrity(client, ctx) {
 // one first passed through assertReadOnlySql, then exits. It opens no
 // connection and needs no credentials.
 //
-// Two uses. It proves the read only guard accepts exactly these nineteen
+// Two uses. It proves the read only guard accepts exactly these twenty
 // statements (the preflight, the courier reference lookup, five checks and
-// twelve sections) and nothing else, and it hands over the statements themselves so
+// thirteen sections) and nothing else, and it hands over the statements themselves so
 // they can be pasted into the Supabase SQL editor and the printed report
 // checked against the database row by row.
 // ---------------------------------------------------------------------------
@@ -1801,8 +1979,39 @@ async function main() {
     console.error("")
     console.error("  Set it to the Session pooler URI from the Supabase dashboard under")
     console.error("  Connect, with the user swapped to gyema_reader.<project_ref> and the")
-    console.error("  password set by hand when the gyema_reader role was created. Keep it")
-    console.error("  in a gitignored .env.local or in the shell.")
+    console.error("  password set by hand when the gyema_reader role was created. Set it in")
+    console.error("  the shell this script runs in: nothing loads .env.local or any other file.")
+    console.error("")
+    process.exit(1)
+  }
+
+  // Before anything else is read: no TLS override in the URL, and the URL
+  // names the project the founder expects. Neither message prints the URL.
+  const sslParams = sslParametersIn(rawUrl)
+  if (sslParams === null || sslParams.length > 0) {
+    console.error("")
+    if (sslParams === null) {
+      console.error("[dispatch-reader] GYEMA_READER_DATABASE_URL could not be parsed as a URL. It is not printed.")
+    } else {
+      console.error(`[dispatch-reader] refused: GYEMA_READER_DATABASE_URL carries ${sslParams.join(", ")}.`)
+      console.error("")
+      console.error("  Those parameters override the verified TLS settings this script sets,")
+      console.error("  and sslmode=disable or no-verify would switch verification off. Remove")
+      console.error("  them; TLS is configured from GYEMA_READER_CA_CERT alone.")
+    }
+    console.error("")
+    process.exit(1)
+  }
+
+  const network = checkExpectedRef(rawUrl, process.env.GYEMA_READER_EXPECTED_REF)
+  if (!network.ok) {
+    console.error("")
+    console.error(`[dispatch-reader] refused: ${network.reason}`)
+    console.error("")
+    console.error("  Set GYEMA_READER_EXPECTED_REF to the Supabase project ref of the network")
+    console.error("  you mean to read, from the project breadcrumb in the dashboard. The script")
+    console.error("  takes the ref from the user name, gyema_reader.<project_ref>, and runs only")
+    console.error("  when the two match.")
     console.error("")
     process.exit(1)
   }
@@ -1888,6 +2097,7 @@ async function main() {
     console.log(RULE)
     console.log("GYEMA DISPATCH READER, guest rail operations brief")
     console.log(RULE)
+    console.log(field("project ref", `${network.ref} (matches GYEMA_READER_EXPECTED_REF)`))
     console.log(field("host", `${target.host}:${target.port}`))
     console.log(field("database", show(meta.db)))
     console.log(field("connected as", show(meta.who)))
@@ -1896,7 +2106,7 @@ async function main() {
     console.log(field("report time", show(meta.now_txt)))
     console.log("")
     console.log("  Read only. This report performs SELECT statements and nothing else.")
-    console.log("  Confirm the host above is the intended project before acting on any line.")
+    console.log("  Confirm the project ref above is the intended project before acting on any line.")
 
     const { missing } = await preflight(client)
     if (missing.length > 0) {
@@ -1960,8 +2170,9 @@ async function main() {
         console.log("")
         console.log("  No rows.")
       } else {
+        const rowCtx = { ...ctx, rows }
         for (const row of rows) {
-          alerts += printRow(section, row, ctx).flags.length
+          alerts += printRow(section, row, rowCtx).flags.length
         }
       }
 
@@ -2013,6 +2224,10 @@ export {
   preflight,
   describePreflightFailure,
   parseSharedConstant,
+  parseStatusUnion,
+  sslParametersIn,
+  projectRefFromUrl,
+  checkExpectedRef,
   runIntegrity,
   readCourierRegistry,
   indexCourierRegistry,
