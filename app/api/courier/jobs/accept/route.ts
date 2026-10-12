@@ -26,7 +26,10 @@ import { claimGuestJob, passesBufferGuards, readClaimableQuote } from "@/lib/gue
 //   assigned_courier_whatsapp  null
 //
 // The registry row is read here by that id, because courier_session_resolve
-// does not return buffer_since or shredded_at (6.2). The ladder
+// does not return buffer_since or shredded_at (6.2), nor operator_checked_at
+// and operator_check_deadline, which the ladder reads for a courier in buffer
+// through the operator check (item 10, option B). operator_checked_by is
+// never read. The ladder
 // (lib/courier-ladder.ts) decides which jobs the courier may take, and the
 // claim (lib/guest-claim.ts) is one guarded UPDATE: verified, posted,
 // unassigned in BOTH columns, the quote the commission was computed from, and
@@ -53,7 +56,7 @@ import { claimGuestJob, passesBufferGuards, readClaimableQuote } from "@/lib/gue
 // the row, as /api/guest/accept does.
 export const runtime = "nodejs"
 
-const REGISTRY_COLUMNS = "status, buffer_since, shredded_at"
+const REGISTRY_COLUMNS = "status, buffer_since, shredded_at, operator_checked_at, operator_check_deadline"
 
 export async function POST(request: NextRequest) {
   try {

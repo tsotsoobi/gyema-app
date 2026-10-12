@@ -7,7 +7,8 @@ import {
   resolveCourier,
 } from "@/lib/courier-auth"
 import { canStartKyc, readCourierKycRow } from "@/lib/courier-kyc"
-import { effectiveTier } from "@/lib/courier-ladder"
+import { effectiveTier, throughOperatorCheck, type LadderRow } from "@/lib/courier-ladder"
+import { piverifyEnabled } from "@/lib/piverify"
 import { checkLimit } from "@/lib/rate-limit"
 
 // The signed-in courier's status card (Phase 1 item 5, 5.2).
@@ -32,7 +33,9 @@ import { checkLimit } from "@/lib/rate-limit"
 //                          uses, so the page never offers a button the route
 //                          would refuse. It needs paused_reason and the
 //                          bound session id, which courier_session_resolve
-//                          does not return, so the row is read here.
+//                          does not return, so the row is read here. False
+//                          whenever piverifyEnabled is false, because the
+//                          route then refuses (item 10, decision 10).
 //   effectiveTier          full, buffer or none: effectiveTier in
 //                          lib/courier-ladder.ts on status and buffer_since,
 //                          with the server clock, the same rule
@@ -40,7 +43,20 @@ import { checkLimit } from "@/lib/rate-limit"
 //                          at 30 days or more reads none while status still
 //                          says buffer (decision 7: status is changed by
 //                          hand). The page decides from this, never from
-//                          status, whether to offer jobs.
+//                          status, whether to offer jobs. A courier in
+//                          buffer through the operator check is bounded by
+//                          the sunset deadline instead (item 10, option B).
+//   operatorChecked        whether the courier is in buffer through the
+//                          operator check (throughOperatorCheck in
+//                          lib/courier-ladder.ts). Never a statement that
+//                          the courier is verified: the check is not KYC.
+//   operatorCheckDeadline  courier_registry.operator_check_deadline: null
+//                          until the sunset starts.
+//   piverifyEnabled        PIVERIFY_ENABLED is exactly "true"
+//                          (lib/piverify.ts). While false the page hides the
+//                          verification button and does not poll.
+//
+// operator_checked_by is never read or returned.
 //
 // GET, with nothing taken from the request but the cookie. Read only: the
 // one write is courier_session_resolve bumping last_seen_at once an hour.
@@ -66,6 +82,14 @@ export async function GET(request: NextRequest) {
       return courierJson({ ok: false, reason: "server_error" }, 500)
     }
 
+    const enabled = piverifyEnabled()
+    const ladderRow: LadderRow = {
+      status: courier.status,
+      buffer_since: row.buffer_since,
+      operator_checked_at: row.operator_checked_at,
+      operator_check_deadline: row.operator_check_deadline,
+    }
+
     return courierJson({
       ok: true,
       courier: {
@@ -73,8 +97,11 @@ export async function GET(request: NextRequest) {
         status: courier.status,
         piverifyStatus: courier.piverify_status,
         piverifyAllowedAction: courier.piverify_allowed_action,
-        canStartKyc: canStartKyc(row),
-        effectiveTier: effectiveTier({ status: courier.status, buffer_since: row.buffer_since }, Date.now()).tier,
+        canStartKyc: enabled && canStartKyc(row),
+        effectiveTier: effectiveTier(ladderRow, Date.now()).tier,
+        operatorChecked: throughOperatorCheck(ladderRow),
+        operatorCheckDeadline: row.operator_check_deadline,
+        piverifyEnabled: enabled,
       },
     })
   } catch (err) {

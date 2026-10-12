@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
 import type { Listing } from "@/lib/listings"
 import { UNNAMED_TRAVELLER_CAPTION, deriveStages, listingCarrierCaption } from "@/lib/tracker-stages"
+import { emDashHits, stripHtmlComments, stripTsComments } from "./helpers/user-facing-text"
 
 // The approved copy (item 8, part (f), 8.17). Repo-wide pins that the
 // retired wording does not come back, plus the strings the founder changed.
@@ -48,9 +49,69 @@ describe("retired wording, repo-wide (app/, components/, lib/, public/*.html)", 
       const values = f.endsWith(".html")
         ? [...src.matchAll(/<title>([^<]*)<\/title>/g)].map((m) => m[1])
         : [...src.matchAll(/\b(?:title|description)\s*:\s*\n?\s*"([^"]*)"/g)].map((m) => m[1])
-      for (const v of values) if (v.includes("—")) hits.push(`${f}: ${v}`)
+      for (const v of values) if (v.includes("\u2014")) hits.push(`${f}: ${v}`)
     }
     expect(hits).toEqual([])
+  })
+})
+
+// Widened 12 Oct 2026 from titles and descriptions to every user-facing
+// string: string literals, template literals and JSX text in .ts and .tsx
+// under app/ and components/, and every public/*.html page outside its
+// comments (tests/helpers/user-facing-text.ts). Comments are developer text
+// and are not read.
+//
+// The em-dashes below were already in user-facing text when the pin was
+// widened, and are recorded by count per file rather than changed: each is
+// copy, and copy changes go through the gyema-accuracy review, not a test.
+// A new em-dash in any file fails; so does one removed without lowering its
+// count here, so the list only ever shrinks.
+const EM_DASHES_RECORDED_12_OCT_2026: Record<string, number> = {
+  "app/api/auth/verify/route.ts": 3,
+  "components/home-tab.tsx": 1,
+  "components/listing-detail-sheet.tsx": 5,
+  "components/profile-tab.tsx": 3,
+  "components/trips-tab.tsx": 3,
+  "public/methodology.html": 8,
+  "public/privacy.html": 6,
+  "public/terms.html": 2,
+}
+
+describe("no em-dash in user-facing text (app/, components/, public/)", () => {
+  it("no new em-dash: the counts per file are exactly the recorded ones", () => {
+    const counts: Record<string, number> = {}
+    for (const h of emDashHits()) counts[h.file] = (counts[h.file] ?? 0) + 1
+    expect(counts).toEqual(EM_DASHES_RECORDED_12_OCT_2026)
+  })
+
+  it("the welcome sheet's Stay safe line carries none, and reads as approved 12 Oct 2026 (item 10)", () => {
+    expect(emDashHits().filter((h) => h.file === "components/welcome-sheet.tsx")).toEqual([])
+    const src = readFileSync("components/welcome-sheet.tsx", "utf8")
+    expect(src).toMatch(/Gyema connects users\. Payments and coordination happen on\s+Pi Chat or WhatsApp\.\s+<\/p>/)
+    expect(src).not.toContain("before sending")
+  })
+
+  // Copy approved 12 Oct 2026 (item 10): signing in with Pi is not proof of
+  // KYC (anchoring spec, gate 4), so no visible string may say so.
+  it('no user-facing string says "via Pi KYC"', () => {
+    expect(emDashHits("via Pi KYC")).toEqual([])
+  })
+
+  it("reads strings, templates and JSX text, and never comments", () => {
+    const D = "\u2014"
+    const ts = [
+      `// a comment ${D} not read`,
+      `/* a block ${D} not read */`,
+      `const a = "a string ${D} read"`,
+      "const b = `a template ${x ? ` nested " + D + " read` : \"\"}`",
+      `{/* a JSX comment ${D} not read */}`,
+      `<p>JSX text, it's here ${D} read</p>`,
+      `const url = "https://example.test/${D}"`,
+    ].join("\n")
+    const kept = stripTsComments(ts).split("\n").map((l) => l.includes(D))
+    expect(kept).toEqual([false, false, true, true, false, true, true])
+    const html = `<!-- a comment ${D} -->\n<p>text ${D}</p>\n<style>/* css ${D} */ p { color: red }</style>`
+    expect(stripHtmlComments(html).split("\n").map((l) => l.includes(D))).toEqual([false, true, false])
   })
 })
 

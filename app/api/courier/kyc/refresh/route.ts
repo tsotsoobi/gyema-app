@@ -12,6 +12,7 @@ import {
   getPiVerifySession,
   isPiVerifySessionId,
   PiVerifyHttpError,
+  piverifyEnabled,
   pollEventId,
   type PiVerifySession,
 } from "@/lib/piverify"
@@ -44,6 +45,9 @@ import { checkLimit } from "@/lib/rate-limit"
 //   not JSON / wrong Origin    415 / 403  the CSRF check, before Redis
 //   body not the schema        400  the body is an empty object
 //   no session                 401 / 503  resolveCourier
+//   PIVERIFY_ENABLED not true  503  piverify_not_enabled: no limiter call, no
+//                                   registry read, no PiVerify call (item 10,
+//                                   decision 10)
 //   courier_kyc_refresh        429  2 a minute per courier, fails closed
 //   row read failed            503  verification_unavailable
 //   nothing to learn           200  skipped: no bound session, approved, a
@@ -83,6 +87,8 @@ export async function POST(request: NextRequest) {
     const verdict = await resolveCourier(admin, request)
     if (!verdict.ok) return courierRefusalResponse(verdict)
     const courierId = verdict.courier.courier_id
+
+    if (!piverifyEnabled()) return courierJson({ ok: false, reason: "piverify_not_enabled" }, 503)
 
     const limit = await checkLimit("courier_kyc_refresh", courierId)
     if (!limit.ok) {

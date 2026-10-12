@@ -253,11 +253,13 @@ check_07_function_acls as (
         'courier_end_session',
         'courier_find_pioneer',
         'courier_issue_signin_code',
+        'courier_record_operator_check',
         'courier_redeem_signin_code',
         'courier_register_legacy',
         'courier_register_pioneer',
         'courier_revoke_sessions',
         'courier_session_resolve',
+        'courier_start_operator_check_sunset',
         'guest_bump_delivery_code_attempts',
         'guest_bump_last4_attempts',
         'guest_stamp_delivery',
@@ -669,12 +671,12 @@ check_09_migration_objects as (
           exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
                    where n.nspname='public' and c.relname='courier_registry_dispatch' and c.relkind='v'
                      and 'security_invoker=false' = any(c.reloptions))),
-        ('2026-10-10 courier registry dispatch', 'courier_registry_dispatch column 9 is piverify_allowed_action, the last of 9 columns',
+        -- Amended 12 Oct 2026 (item 10): P18 appends columns 10 and 11, so this
+        -- row no longer says "the last of 9". The 2026-10-12 rows check the rest.
+        ('2026-10-10 courier registry dispatch', 'courier_registry_dispatch column 9 is piverify_allowed_action',
           exists (select 1 from information_schema.columns
                    where table_schema='public' and table_name='courier_registry_dispatch'
-                     and column_name='piverify_allowed_action' and ordinal_position=9)
-          and (select count(*) from information_schema.columns
-                where table_schema='public' and table_name='courier_registry_dispatch') = 9),
+                     and column_name='piverify_allowed_action' and ordinal_position=9)),
         ('2026-10-10 courier registry dispatch', 'courier_registry_dispatch carries no pi_username, commitment_salt, piverify_session_id, auth_user_id or id',
           to_regclass('public.courier_registry_dispatch') is not null
           and not exists (select 1 from information_schema.columns
@@ -721,7 +723,91 @@ check_09_migration_objects as (
                    where k.conrelid = to_regclass('public.courier_registry')
                      and k.conname = 'courier_registry_buffer_needs_since_check'
                      and k.contype = 'c' and k.convalidated
-                     and pg_get_constraintdef(k.oid) ~ 'buffer_since IS NOT NULL'))
+                     and pg_get_constraintdef(k.oid) ~ 'buffer_since IS NOT NULL')),
+        ('2026-10-12 operator check', 'column courier_registry.operator_checked_at, timestamptz',
+          exists (select 1 from information_schema.columns
+                   where table_schema='public' and table_name='courier_registry'
+                     and column_name='operator_checked_at' and data_type='timestamp with time zone'
+                     and is_nullable='YES')),
+        ('2026-10-12 operator check', 'column courier_registry.operator_checked_by, text',
+          exists (select 1 from information_schema.columns
+                   where table_schema='public' and table_name='courier_registry'
+                     and column_name='operator_checked_by' and data_type='text'
+                     and is_nullable='YES')),
+        ('2026-10-12 operator check', 'column courier_registry.operator_check_deadline, timestamptz',
+          exists (select 1 from information_schema.columns
+                   where table_schema='public' and table_name='courier_registry'
+                     and column_name='operator_check_deadline' and data_type='timestamp with time zone'
+                     and is_nullable='YES')),
+        ('2026-10-12 operator check', 'constraint courier_registry_operator_checked_legacy_only_check, validated',
+          exists (select 1 from pg_constraint k
+                   where k.conrelid = to_regclass('public.courier_registry')
+                     and k.conname = 'courier_registry_operator_checked_legacy_only_check'
+                     and k.contype = 'c' and k.convalidated
+                     and pg_get_constraintdef(k.oid) ~ 'class = ''legacy''::text')),
+        ('2026-10-12 operator check', 'constraint courier_registry_operator_check_pair_check, validated',
+          exists (select 1 from pg_constraint k
+                   where k.conrelid = to_regclass('public.courier_registry')
+                     and k.conname = 'courier_registry_operator_check_pair_check'
+                     and k.contype = 'c' and k.convalidated
+                     and pg_get_constraintdef(k.oid) ~ 'operator_checked_by IS NULL')),
+        ('2026-10-12 operator check', 'constraint courier_registry_operator_checked_by_check, validated, founder only',
+          exists (select 1 from pg_constraint k
+                   where k.conrelid = to_regclass('public.courier_registry')
+                     and k.conname = 'courier_registry_operator_checked_by_check'
+                     and k.contype = 'c' and k.convalidated
+                     and pg_get_constraintdef(k.oid) ~ '''founder''::text'
+                     and (select count(*) from regexp_matches(pg_get_constraintdef(k.oid), '''[a-z_]+''', 'g')) = 1)),
+        ('2026-10-12 operator check', 'constraint courier_registry_operator_check_deadline_check, validated',
+          exists (select 1 from pg_constraint k
+                   where k.conrelid = to_regclass('public.courier_registry')
+                     and k.conname = 'courier_registry_operator_check_deadline_check'
+                     and k.contype = 'c' and k.convalidated
+                     and pg_get_constraintdef(k.oid) ~ 'operator_check_deadline IS NULL')),
+        ('2026-10-12 operator check', 'function courier_record_operator_check(uuid, text), security definer, search_path pinned',
+          exists (select 1 from pg_proc p
+                   where p.oid = to_regprocedure('public.courier_record_operator_check(uuid, text)')
+                     and p.prosecdef and array_to_string(p.proconfig, ',') like '%search_path%')),
+        ('2026-10-12 operator check', 'function courier_start_operator_check_sunset(), security definer, search_path pinned',
+          exists (select 1 from pg_proc p
+                   where p.oid = to_regprocedure('public.courier_start_operator_check_sunset()')
+                     and p.prosecdef and array_to_string(p.proconfig, ',') like '%search_path%')),
+        ('2026-10-12 operator check', 'service_role cannot execute courier_record_operator_check',
+          case when to_regprocedure('public.courier_record_operator_check(uuid, text)') is null then false
+               else not has_function_privilege('service_role', 'public.courier_record_operator_check(uuid, text)', 'EXECUTE')
+                    and not exists (
+                      select 1 from pg_proc p
+                      cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                      where p.oid = to_regprocedure('public.courier_record_operator_check(uuid, text)')
+                        and a.grantee <> p.proowner) end),
+        ('2026-10-12 operator check', 'service_role cannot execute courier_start_operator_check_sunset',
+          case when to_regprocedure('public.courier_start_operator_check_sunset()') is null then false
+               else not has_function_privilege('service_role', 'public.courier_start_operator_check_sunset()', 'EXECUTE')
+                    and not exists (
+                      select 1 from pg_proc p
+                      cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                      where p.oid = to_regprocedure('public.courier_start_operator_check_sunset()')
+                        and a.grantee <> p.proowner) end),
+        ('2026-10-12 operator check', 'courier_bind_piverify_session keeps buffer for a checked courier before the deadline',
+          exists (select 1 from pg_proc p
+                   where p.oid = to_regprocedure('public.courier_bind_piverify_session(uuid, text, text, text)')
+                     and p.prosrc ~ 'r\.buffer_since = r\.operator_checked_at'
+                     and p.prosrc ~ 'now\(\) < r\.operator_check_deadline')),
+        ('2026-10-12 operator check', 'courier_registry_dispatch column 10 is operator_checked_at',
+          exists (select 1 from information_schema.columns
+                   where table_schema='public' and table_name='courier_registry_dispatch'
+                     and column_name='operator_checked_at' and ordinal_position=10)),
+        ('2026-10-12 operator check', 'courier_registry_dispatch column 11 is operator_check_deadline, the last of 11 columns',
+          exists (select 1 from information_schema.columns
+                   where table_schema='public' and table_name='courier_registry_dispatch'
+                     and column_name='operator_check_deadline' and ordinal_position=11)
+          and (select count(*) from information_schema.columns
+                where table_schema='public' and table_name='courier_registry_dispatch') = 11),
+        ('2026-10-12 operator check', 'courier_registry_dispatch carries no operator_checked_by',
+          to_regclass('public.courier_registry_dispatch') is not null
+          and not exists (select 1 from information_schema.columns
+                           where table_schema='public' and table_name='courier_registry_dispatch'
+                             and column_name='operator_checked_by'))
     ) as t(m, o, present)
   ) s
 ),
@@ -931,7 +1017,26 @@ check_14_courier_registry as (
       'paused_without_reason',
         (xpath('/row/n/text()', query_to_xml(
           'select count(*) as n from public.courier_registry where status = ''paused'' and paused_reason is null',
-          false, true, '')))[1]::text::bigint)
+          false, true, '')))[1]::text::bigint,
+      -- Added 12 Oct 2026, item 10 (P18). Null before
+      -- 2026-10-12_courier_operator_check.sql adds the columns.
+      'operator_checked_buffer_past_deadline',
+        case when exists (select 1 from information_schema.columns
+                           where table_schema = 'public' and table_name = 'courier_registry'
+                             and column_name = 'operator_check_deadline')
+             then (xpath('/row/n/text()', query_to_xml(
+               'select count(*) as n from public.courier_registry where status = ''buffer'' '
+               || 'and operator_checked_at is not null and buffer_since = operator_checked_at '
+               || 'and operator_check_deadline <= now() and shredded_at is null',
+               false, true, '')))[1]::text::bigint end,
+      'operator_checked_not_legacy',
+        case when exists (select 1 from information_schema.columns
+                           where table_schema = 'public' and table_name = 'courier_registry'
+                             and column_name = 'operator_checked_at')
+             then (xpath('/row/n/text()', query_to_xml(
+               'select count(*) as n from public.courier_registry where operator_checked_at is not null '
+               || 'and class <> ''legacy''',
+               false, true, '')))[1]::text::bigint end)
   ) end as v
 ),
 
@@ -1130,7 +1235,9 @@ select jsonb_pretty(jsonb_build_object(
       || '2026-10-08_courier_piverify_bind.sql is applied: courier_bind_piverify_session, service_role and the owner. '
       || 'Once 2026-10-09_guest_jobs_courier_assignment.sql is applied: courier_register_pioneer carries the owner '
       || 'alone, acl {postgres=X/postgres}, founder-only like courier_register_legacy; courier_find_pioneer '
-      || 'carries service_role and the owner.',
+      || 'carries service_role and the owner. Once 2026-10-12_courier_operator_check.sql is applied: '
+      || 'courier_record_operator_check and courier_start_operator_check_sunset carry the owner alone, acl '
+      || '{postgres=X/postgres}, founder-only; courier_bind_piverify_session still service_role and the owner.',
     'check_08_guard_columns',
       'delivery_code_attempts present with default 0, and NO equivalent counter for the sender side last-4 '
       || 'guard. That absence is S-2, recorded from the catalog rather than inferred from reading routes.',
@@ -1162,7 +1269,11 @@ select jsonb_pretty(jsonb_build_object(
       || 'was added by hand before db/migrations existed and found by catalog read on 11 Oct 2026, seven values, '
       || 'pending_quote among them; 2026-10-11_guest_jobs_status_check.sql records it and is a no-op there. '
       || 'The two 2026-10-11 registry timing checks rows read false until '
-      || '2026-10-11_courier_registry_timing_checks.sql is applied, and true after (Testnet, 11 Oct 2026).',
+      || '2026-10-11_courier_registry_timing_checks.sql is applied, and true after (Testnet, 11 Oct 2026). '
+      || 'The fifteen 2026-10-12 operator check rows read false until 2026-10-12_courier_operator_check.sql '
+      || 'is applied, and true after; two are service_role cannot execute rows, one per founder-only function. '
+      || 'The bind row reads false again if 2026-10-08_courier_piverify_bind.sql is ever re-run after it: never '
+      || 're-run P12 after P18; running P18 again fixes it.',
     'check_10_reader_role',
       'After 2026-09-07: settings carry default_transaction_read_only=on, statement_timeout=10s, '
       || 'idle_in_transaction_session_timeout=30s, lock_timeout=5s. superuser, createdb, createrole and '
@@ -1178,8 +1289,9 @@ select jsonb_pretty(jsonb_build_object(
       || 'Any other row, or PUBLIC or anon on that one, is a finding: a security definer function PUBLIC, anon or '
       || 'authenticated can execute is reachable through PostgREST with a public key, whoever wrote it and '
       || 'whenever. Extended 8 October from PUBLIC only; the earlier text match also missed any ACL that named '
-      || 'service_role alongside anon. Still exactly that one row after the courier sign-in, piverify bind and '
-      || 'courier assignment files: each revokes its own functions from PUBLIC, anon and authenticated.',
+      || 'service_role alongside anon. Still exactly that one row after the courier sign-in, piverify bind, '
+      || 'courier assignment and operator check files: each revokes its own functions from PUBLIC, anon and '
+      || 'authenticated.',
     'check_12b_default_privileges',
       'One row per creating role and object type with default privileges in schema public. For the postgres '
       || 'rows: grants_anon_or_authenticated false on tables and sequences. CORRECTED 8 October: there IS a '
@@ -1210,7 +1322,17 @@ select jsonb_pretty(jsonb_build_object(
       || 'After 2026-10-11_courier_registry_timing_checks.sql (P17, founder decision 11 Oct 2026): fifteen '
       || 'constraints, the two new ones courier_registry_full_needs_approval_check and '
       || 'courier_registry_buffer_needs_since_check, which turn the full and buffer timing rules below into checks, '
-      || 'so those two counts can only read zero; the paused rule stays a count. timing_rule_breaks counts rows '
+      || 'so those two counts can only read zero; the paused rule stays a count. After '
+      || '2026-10-12_courier_operator_check.sql (P18, item 10): twenty columns, the new ones operator_checked_at '
+      || '(timestamptz), operator_checked_by (text) and operator_check_deadline (timestamptz), all nullable, and '
+      || 'nineteen constraints, the four new ones courier_registry_operator_checked_legacy_only_check, '
+      || 'courier_registry_operator_check_pair_check, courier_registry_operator_checked_by_check and '
+      || 'courier_registry_operator_check_deadline_check; the indexes do not change. Two counts are added, '
+      || 'null before P18: operator_checked_buffer_past_deadline is information, a buffer row through the check '
+      || 'at or past its sunset deadline, which the ladder already refuses and which is due a hand pause '
+      || '(paused_reason pending_timeout); operator_checked_not_legacy can only read zero after P18. An '
+      || 'operator check is never verification: anchoring and the trust bureau read kyc_approved_at only. '
+      || 'timing_rule_breaks counts rows '
       || 'breaking rules that are deliberately not constraints, because the operator sets paused by hand: expect '
       || 'zero on each. A non-zero count is a row to look at, not necessarily a fault. A full row needs '
       || 'kyc_approved_at or vouched_at; vouched_at_column_exists says which rule was counted, and before the '

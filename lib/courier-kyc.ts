@@ -23,8 +23,10 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 
 /**
  * The courier_registry columns the KYC decision and the poll read, plus
- * buffer_since, which GET /api/courier/me passes to the ladder for
- * effectiveTier (item 6 review). The KYC decision does not read it.
+ * buffer_since, operator_checked_at and operator_check_deadline, which
+ * GET /api/courier/me passes to the ladder for effectiveTier (item 6 review;
+ * item 10, option B). The KYC decision reads none of those three.
+ * operator_checked_by is never read here, or anywhere outside SQL.
  */
 export type CourierKycRow = {
   paused_reason: string | null
@@ -33,9 +35,13 @@ export type CourierKycRow = {
   piverify_status: string | null
   piverify_allowed_action: string | null
   kyc_approved_at: string | null
+  operator_checked_at: string | null
+  operator_check_deadline: string | null
 }
 
-const KYC_COLUMNS = "paused_reason, buffer_since, piverify_session_id, piverify_status, piverify_allowed_action, kyc_approved_at"
+const KYC_COLUMNS =
+  "paused_reason, buffer_since, piverify_session_id, piverify_status, piverify_allowed_action, kyc_approved_at, " +
+  "operator_checked_at, operator_check_deadline"
 
 /**
  * The courier's row, or null when there is none, or "error" when the
@@ -64,6 +70,8 @@ export async function readCourierKycRow(
       piverify_status: row.piverify_status ?? null,
       piverify_allowed_action: row.piverify_allowed_action ?? null,
       kyc_approved_at: row.kyc_approved_at ?? null,
+      operator_checked_at: row.operator_checked_at ?? null,
+      operator_check_deadline: row.operator_check_deadline ?? null,
     }
   } catch (err) {
     console.warn(`[courier-kyc] courier_registry read threw: ${err instanceof Error ? err.name : "unknown"}`)

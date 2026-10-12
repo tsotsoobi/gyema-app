@@ -59,6 +59,8 @@ function row(overrides: Partial<Row> = {}): Row {
     piverify_status: null,
     piverify_allowed_action: null,
     kyc_approved_at: null,
+    operator_checked_at: null,
+    operator_check_deadline: null,
     ...overrides,
   }
 }
@@ -147,6 +149,9 @@ beforeEach(() => {
   vi.stubEnv("COURIER_HOST", HOST)
   vi.stubEnv("PIVERIFY_API_BASE_URL", `${API}/`)
   vi.stubEnv("PIVERIFY_API_KEY", "sbx_test_only")
+  // PiVerify on (item 10, decision 10): every existing test here runs as
+  // before. The off path has its own tests.
+  vi.stubEnv("PIVERIFY_ENABLED", "true")
   vi.spyOn(Date, "now").mockReturnValue(NOW)
   vi.spyOn(console, "log").mockImplementation(() => {})
   vi.spyOn(console, "warn").mockImplementation(() => {})
@@ -681,6 +686,61 @@ describe("the files part (c) adds or changes name no network", () => {
       "tests/routes/courier-kyc.test.ts",
     ]) {
       expect(readFileSync(f, "utf8"), f).not.toMatch(NETWORK_SCAN)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Item 10, decision 10: PIVERIFY_ENABLED off
+// ---------------------------------------------------------------------------
+
+describe("PIVERIFY_ENABLED off: kyc/start and kyc/refresh refuse before PiVerify", () => {
+  const routes = [
+    ["kyc/start", () => start.POST(req("/api/courier/kyc/start") as never)],
+    ["kyc/refresh", () => refresh.POST(req("/api/courier/kyc/refresh") as never)],
+  ] as const
+
+  for (const value of [undefined, "", "false", "TRUE", "1", " true"]) {
+    for (const [name, call] of routes) {
+      it(`${name} with PIVERIFY_ENABLED ${JSON.stringify(value)}: 503 piverify_not_enabled, no limiter, no registry read, no PiVerify, no RPC but the resolve`, async () => {
+        if (value === undefined) delete process.env.PIVERIFY_ENABLED
+        else vi.stubEnv("PIVERIFY_ENABLED", value)
+        const fetchSpy = piverifyAnswers({ create: { body: session() }, byId: { [BOUND]: { body: session({ id: BOUND }) } } })
+        vi.stubGlobal("fetch", fetchSpy)
+        signedIn(row({ piverify_session_id: BOUND, piverify_status: "started" }))
+        const res = await call()
+        expect(res.status).toBe(503)
+        expect(await res.json()).toEqual({ ok: false, reason: "piverify_not_enabled" })
+        expect(fetchSpy).not.toHaveBeenCalled()
+        expect(checkLimit).not.toHaveBeenCalled()
+        expect(mock.trace()).not.toContain('from("courier_registry")')
+        expect(rpcCalls().map((c) => c.args[0])).toEqual(["courier_session_resolve"])
+        expect(writes()).toEqual([])
+      })
+    }
+  }
+
+  for (const [name, call] of [
+    ["kyc/start", (o: Opts) => start.POST(req("/api/courier/kyc/start", o) as never)],
+    ["kyc/refresh", (o: Opts) => refresh.POST(req("/api/courier/kyc/refresh", o) as never)],
+  ] as const) {
+    it(`${name}: a signed-out caller still gets 401, and an off-surface request 404, before the switch is read`, async () => {
+      vi.stubEnv("PIVERIFY_ENABLED", "false")
+      expect((await call({ cookie: null })).status).toBe(401)
+      expect((await call({ surface: "pioneer" })).status).toBe(404)
+      expect(checkLimit).not.toHaveBeenCalled()
+    })
+  }
+
+  it("the switch sits after resolveCourier and before the limiter in both routes", () => {
+    for (const f of ["app/api/courier/kyc/start/route.ts", "app/api/courier/kyc/refresh/route.ts"]) {
+      const src = readFileSync(f, "utf8")
+      const resolve = src.indexOf("await resolveCourier(admin, request)")
+      const sw = src.indexOf('if (!piverifyEnabled()) return courierJson({ ok: false, reason: "piverify_not_enabled" }, 503)')
+      const limit = src.indexOf("await checkLimit(")
+      expect(resolve, f).toBeGreaterThan(-1)
+      expect(sw, f).toBeGreaterThan(resolve)
+      expect(limit, f).toBeGreaterThan(sw)
     }
   })
 })

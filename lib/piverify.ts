@@ -20,6 +20,11 @@
 //                           not a hardcoded constant)
 //   PIVERIFY_API_KEY        secret key. sbx_ in sandbox, live_ in production.
 //   PIVERIFY_WEBHOOK_SECRET HMAC key for verifying inbound webhook signatures.
+//   PIVERIFY_ENABLED        the switch (item 10, decision 10). On only when it
+//                           reads exactly "true". Production only, per
+//                           network, unset until PiVerify authenticates for
+//                           Gyema's account. Read through piverifyEnabled()
+//                           and nothing else.
 
 import { createHmac, timingSafeEqual } from "crypto"
 
@@ -45,6 +50,20 @@ function getApiKey(): string {
     throw new Error("[piverify] PIVERIFY_API_KEY is not configured")
   }
   return key
+}
+
+/**
+ * Whether PiVerify is open to couriers (item 10, decision 10,
+ * docs/anchoring-phase1-notes.md 10.7). True only when PIVERIFY_ENABLED is
+ * exactly "true": unset, empty, "false", "TRUE", " true" and anything else
+ * are off, so a typo fails closed. Server side, read per request; never
+ * NEXT_PUBLIC_. While it is off, POST /api/courier/kyc/start and
+ * /api/courier/kyc/refresh refuse before any PiVerify call, and
+ * GET /api/courier/me tells the page to hide the verification button.
+ * The webhook keeps its own gate, PIVERIFY_WEBHOOK_SECRET.
+ */
+export function piverifyEnabled(): boolean {
+  return process.env.PIVERIFY_ENABLED === "true"
 }
 
 // ---------------------------------------------------------------------------

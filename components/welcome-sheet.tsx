@@ -52,10 +52,10 @@ export function WelcomeSheet({ onDismiss }: WelcomeSheetProps) {
             <div className="text-2xl shrink-0">⚠️</div>
             <div className="flex-1 min-w-0">
               <p className="font-semibold text-sm">Stay safe</p>
+              {/* Copy approved 12 Oct 2026 (item 10). */}
               <p className="text-xs text-muted-foreground leading-relaxed mt-0.5">
-                Gyema connects users — payments and coordination happen on
-                Pi Chat or WhatsApp. Verify identity via Pi KYC before sending
-                valuables.
+                Gyema connects users. Payments and coordination happen on
+                Pi Chat or WhatsApp.
               </p>
             </div>
           </section>
